@@ -1,0 +1,2 @@
+# Bachelor-Thesis-Probabilistic-Forecasting-for-Swiss-Inflation
+ Swiss monetary policy traditionally communicates point forecasts of CPI inflation. The past  few years shocks from the pandemic, energy prices, and exchange-rate swings have revealed  substantial tail risks that these forecasts fail to capture. Therefore, this thesis aims  display the entire spread of risks rather than one  point using the QRF.
