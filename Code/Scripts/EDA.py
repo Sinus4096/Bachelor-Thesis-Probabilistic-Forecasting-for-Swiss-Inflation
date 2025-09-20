@@ -229,18 +229,6 @@ wages = wages.resample('MS').ffill()
 wages
 
 QRF_data= pd.merge(QRF_data, wages, left_index=True, right_index=True, how='left')
-QRF_data
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -355,45 +343,6 @@ B_Conf.columns= ['Date', 'Business_Confidence_EU']
 B_Conf= B_Conf.set_index('Date')
 QRF_data= pd.merge(QRF_data, B_Conf, left_index=True, right_index=True, how='left')
 
-QRF_data.columns
-
-
-
-
-
-
-
-
-
-
-
-
-#productivity
-productivity= pd.read_excel(file_path +'/Multifactorproductivity.xlsx')
-
-#trade
-trade= pd.read_excel(file_path+'/foreign_trade_by_goods.xlsx', header= 2)
-trade= trade.rename(columns={'Unnamed: 0': 'Product Group'})
-trade
-
-# --- 3. Assign Trade Flow and Reshape ---
-# Create the 'Trade Flow' column based on row position
-df_totals['Trade Flow'] = np.where(df_totals.index < imports_start_index, 'Export', 'Import')
-
-# Melt the simplified DataFrame
-final_df = df_totals.melt(
-    id_vars=['Trade Flow', 'Product Group'],
-    var_name='Year',
-    value_name='Value_CHF_Million'
-)
-
-# --- 4. Finalize ---
-final_df['Date'] = pd.to_datetime(final_df['Year'], format='%Y')
-final_df = final_df.drop(columns=['Year', 'Product Group']) # Product Group is redundant now
-final_df = final_df[['Date', 'Trade Flow', 'Value_CHF_Million']]
-
-print(final_df)
-
 
 #threshold variables
 data = pxpy.PXDataset(file_path+ '/Industrial_Production.px')
@@ -403,3 +352,4 @@ data = pxpy.PXDataset(file_path+ '/Industrial_Production.px')
 
 #default facories fürs modeln
 #hyperparameter with optuna
+
