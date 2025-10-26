@@ -5,10 +5,13 @@ import numpy as np
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
+import os
 warnings.filterwarnings('ignore')
 
-#Use relative path 
-BASE_PATH = Path(__file__).parent.parent.parent / 'Data' / 'Raw_Data'
+
+script_dir = Path(__file__).resolve().parent
+    # Go up to Code folder, then up to project root
+BASE_PATH = script_dir.parent.parent / 'Code'/ 'Data' / 'Raw_Data'
 
 def load_cpi_data(file_path):
     """Load and process CPI inflation data"""
