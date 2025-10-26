@@ -389,7 +389,10 @@ if __name__ == "__main__":
     print("\nFirst few rows:")
     print(QRF_data.head())
     
-    # Optional: Save to file
-    # QRF_data.to_csv('QRF_data.csv')
-    # print("\nData saved to QRF_data.csv")
+    #save as csv
+    CODE_DIR = Path(__file__).parent.parent
+    output_path = CODE_DIR / "Data" / "Cleaned_Data"
+    output_path.mkdir(parents=True, exist_ok=True) 
+    output_file = output_path / 'QRF_data.csv'
+    QRF_data.to_csv(output_file, index=True)
 
