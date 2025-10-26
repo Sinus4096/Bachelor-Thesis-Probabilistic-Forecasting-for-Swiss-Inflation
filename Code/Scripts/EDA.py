@@ -10,7 +10,6 @@ warnings.filterwarnings('ignore')
 
 
 script_dir = Path(__file__).resolve().parent
-    # Go up to Code folder, then up to project root
 BASE_PATH = script_dir.parent.parent / 'Code'/ 'Data' / 'Raw_Data'
 
 def load_cpi_data(file_path):
@@ -243,9 +242,10 @@ def load_retail():
 def load_exchange_rate(file_path):
     """Load exchange rates"""
     print("Loading Exchange rates...")
-    Exchange = pd.read_excel(file_path / 'SNB_Exchange_rates.xlsx', header=15)
+    Exchange = pd.read_excel(file_path / 'SNB_Exchange_rates.xlsx', header=15, sheet_name=0)
     Exchange = Exchange.iloc[:, [0, 1]]
     Exchange.columns = ['Date', 'Exchange_Rate_CHF']
+    Exchange['Date'] = pd.to_datetime(Exchange['Date'])
     return Exchange.set_index('Date')
 
 def load_mortgages(file_path):
