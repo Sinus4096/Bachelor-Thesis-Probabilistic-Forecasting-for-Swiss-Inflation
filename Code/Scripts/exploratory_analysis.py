@@ -10,7 +10,7 @@ path = 'Code/Data/Cleaned_Data/QRF_data.csv'
 df = pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #look at part where all values exist:
-start_date = '2001-01-01'
+start_date = '2001-04-01'
 end_date = '2025-04-01'
 df = df.loc[start_date:end_date]
 df.info()
