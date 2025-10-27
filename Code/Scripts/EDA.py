@@ -13,8 +13,7 @@ script_dir = Path(__file__).resolve().parent
 BASE_PATH = script_dir.parent.parent / 'Code'/ 'Data' / 'Raw_Data'
 
 def load_cpi_data(file_path):
-    """Load and process CPI inflation data"""
-    print("Loading CPI data...")
+    """Load and process CPI inflation data: are year-over-year changes"""
     cpi_data_wide = pd.read_excel(file_path / 'Inflation.xlsx', sheet_name='VAR_m-12', header=3)
     target_rows = ['Total', '    Kerninflation 1']
     filtered_data = cpi_data_wide[cpi_data_wide['Position_D'].isin(target_rows)].copy()
@@ -46,25 +45,57 @@ def load_kof_barometer(file_path):
     return KOF_barometer.set_index('Date')
 
 def load_unemployment(file_path):
-    """Load and process unemployment rate"""
+    """Load and process unemployment rate with debugging"""
     print("Loading Unemployment data...")
     u_rate = pd.read_excel(file_path / 'Arbeitslosenquote.xlsx', sheet_name=None, header=4)
+    
+    print(f"\nFound {len(u_rate)} sheets")
+    print(f"Sheet names: {list(u_rate.keys())}")
+    
     data_list = []
     
     for year, df in u_rate.items():
+        print(f"\n--- Processing sheet: {year} ---")
+        print(f"Shape: {df.shape}")
+        print(f"Columns: {list(df.columns)}")
+        print(f"\nFirst few rows:")
+        print(df.head(10))
+        
         for i in range(len(df)):
             cell_value = df.iloc[i, 0]
             if pd.notna(cell_value) and str(cell_value).strip().lower() == 'total':
+                print(f"\nFound 'Total' at row {i}")
                 total_row = df.iloc[i]
-                for col in df.columns[2:]:
-                    value = total_row[col]
-                    if pd.notna(value):
-                        date_str = f"{col}"
-                        data_list.append({'date': date_str, 'total': value})
+                print(f"Total row values: {total_row.values}")
+                
+                # Check what the columns actually are
+                for col_idx in range(2, min(5, len(df.columns))):  # Check first few data columns
+                    col = df.columns[col_idx]
+                    value = total_row.iloc[col_idx]
+                    print(f"Column {col_idx}: name='{col}', type={type(col)}, value={value}")
+                
+                # Now process all columns
+                for col_idx in range(2, len(df.columns)):
+                    col = df.columns[col_idx]
+                    value = total_row.iloc[col_idx]
+                    if pd.notna(value) and pd.notna(col):
+                        print(f"Processing: col='{col}', value={value}")
+                        date_str = str(col).strip()
+                        try:
+                            date = pd.to_datetime(date_str, format='%Y-%m')
+                            data_list.append({'date': date, 'total': value})
+                            print(f"  -> Successfully added: {date}")
+                        except Exception as e:
+                            print(f"  -> Failed to parse '{date_str}': {e}")
+                
                 break
     
+    print(f"\nTotal entries collected: {len(data_list)}")
+    if data_list:
+        print(f"First entry: {data_list[0]}")
+        print(f"Last entry: {data_list[-1]}")
+    
     Unemployed = pd.DataFrame(data_list)
-    Unemployed['date'] = pd.to_datetime(Unemployed['date'])
     Unemployed = Unemployed.sort_values('date').reset_index(drop=True)
     Unemployed.set_index('date', inplace=True)
     Unemployed.columns = ['unemployment_rate']
