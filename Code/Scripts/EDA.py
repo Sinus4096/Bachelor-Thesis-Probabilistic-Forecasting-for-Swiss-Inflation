@@ -6,6 +6,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 import os
+import re
 warnings.filterwarnings('ignore')
 
 
@@ -157,34 +158,48 @@ def load_eu_interest(file_path):
     return EU_interest[['EU_fin_spread']]
 
 def load_wages(file_path):
-    """Load wage data"""
-    print("Loading Wage data...")
+    """Load wage data, extracting numerical values from annotated cells like '1.2a'."""
+    print("Loading Wage data (simplified version)...")
+    
     df = pd.read_excel(file_path / 'quarterly_nominal_wage_development.xlsx', header=3)
     tidy_data = []
     
-    data_row_indices = df[df.iloc[:, 0] == 'Annual variation of nominal wages  (in %)'].index
+    data_row_indices = df[df.iloc[:, 0].astype(str).str.contains('Annual variation of nominal wages', na=False)].index
+    
+    quarter_to_month_map = {'I': 1, 'II': 4, 'III': 7, 'IV': 10}
     
     for idx in data_row_indices:
-        year_row = df.iloc[idx - 4]
+        year_row_filled = df.iloc[idx - 4].ffill()
         quarter_row = df.iloc[idx - 3]
         value_row = df.iloc[idx]
-        year_row.ffill(inplace=True)
         
-        for col in range(1, len(df.columns)):
-            year = year_row.iloc[col]
-            quarter = quarter_row.iloc[col]
-            value = value_row.iloc[col]
-            tidy_data.append({'Year': int(year), 'Quarter': quarter, 'Nominal_Wage_Variation_Percent': value})
-    
-    wages = pd.DataFrame(tidy_data)
-    wages['Wage_change'] = pd.to_numeric(wages['Nominal_Wage_Variation_Percent'], errors='coerce')
-    quarter_to_month_map = {'I': 1, 'II': 4, 'III': 7, 'IV': 10}
-    wages['Month'] = wages['Quarter'].map(quarter_to_month_map)
-    wages['Day'] = 1
-    wages['Date'] = pd.to_datetime(wages[['Year', 'Month', 'Day']])
-    wages = wages[['Date', 'Wage_change']].set_index('Date')
-    wages = wages.resample('MS').ffill()
-    return wages
+        for col_idx in range(1, len(df.columns)):
+            year = year_row_filled.iloc[col_idx]
+            quarter_raw = quarter_row.iloc[col_idx]
+            raw_value = value_row.iloc[col_idx]
+            #some values have 'a' if they're uncertain-> extract numerical part or forward fill as we only have short gaps
+            if pd.notna(year) and pd.notna(quarter_raw) and pd.notna(raw_value):
+                    quarter_clean = str(quarter_raw).strip().upper()
+                    month = quarter_to_month_map.get(quarter_clean)
+
+                    #eExtract numerical part using regex
+                    raw_value_str = str(raw_value).strip()
+                    match = re.match(r'^(-?\d+(\.\d+)?)', raw_value_str)
+                    
+                    wage_change_num = float(match.group(1)) if match else None
+
+                    if wage_change_num is not None:
+                        tidy_data.append({
+                            'Year': int(year),
+                            'Month': month,
+                            'Wage_change': wage_change_num
+                        })
+    wages_df = pd.DataFrame(tidy_data)
+    wages_df['Day'] = 1
+    wages_df['Date'] = pd.to_datetime(wages_df[['Year', 'Month', 'Day']], errors='coerce')    
+    wages_df = wages_df[['Date', 'Wage_change']].set_index('Date').sort_index()
+    wages_df = wages_df.resample('MS').ffill()    
+    return wages_df
 
 def load_turnover_and_ppi(file_path):
     """Load industrial turnover and PPI via API"""

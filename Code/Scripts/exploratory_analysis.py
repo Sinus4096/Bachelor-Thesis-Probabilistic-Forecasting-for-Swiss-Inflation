@@ -10,7 +10,7 @@ path = 'Code/Data/Cleaned_Data/QRF_data.csv'
 df = pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #look at part where all values exist:
-start_date = '2001-04-01'
+start_date = '2001-05-01'
 end_date = '2025-04-01'
 df = df.loc[start_date:end_date]
 df.info()
@@ -44,9 +44,9 @@ nans_per_column = df.isna().sum()
 print(nans_per_column)
 
 #check when NaNs occured:
-print(df[df['Core_CPI'].isna()])
-print(df[df['unemployment_rate'].isna()])
-print(df[df['Wage_change'].isna()])
+all_values_as_string = df['Wage_change'].to_string()
+
+print(all_values_as_string)
 
 
 #Handling NaNs Timeseries appropriately wit linear interpolation 
