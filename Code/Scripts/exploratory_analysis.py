@@ -6,6 +6,7 @@ import numpy as np
 from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
 from statsmodels.tsa.arima_process import ArmaProcess 
+from statsmodels.tsa.stattools import adfuller
 
 
 #do 3,6,9 and 12 month forecasts-> long and short term
@@ -102,6 +103,20 @@ df = df.loc[start_date:end_date]
 #check for NAN again -> all fine
 nans_per_column = df.isna().sum()
 print(nans_per_column)
+
+#if look at plots seem to oscillate around a roughly 0 mean condition-> trend should be gone
+#ACF: now a faster, rather geometric decay 
+#PACF: sharp cutoff at lag 1-> probably a non-stationary RW but already try ADF test (AR(1) process)
+for col in cols_to_analyse:
+    adf_result = adfuller(df[col], autolag='AIC')
+    print(f"Results for: {col}")
+    print(f'p-value: {adf_result[1]:.4f}')    
+    if adf_result[1] <= 0.05:
+        print("Result: STATIONARY")
+    else:
+        print("Result: NON-STATIONARY")
+#try first difference to get ridd off the RW 
+
 
 
 
