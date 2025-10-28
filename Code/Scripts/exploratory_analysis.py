@@ -2,6 +2,8 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
+
 
 #do 3,6,9 and 12 month forecasts-> long and short term
 #compare with out of sample method-> data got up to then model's recursive forecasting vintages, find the corresponding benchmark vintage
@@ -27,7 +29,7 @@ path = 'Code/Data/Cleaned_Data/QRF_data.csv'
 df = pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #look at part where all values exist:
-start_date = '2001-05-01'
+start_date = '2000-05-01'
 end_date = '2025-04-01'
 df = df.loc[start_date:end_date]
 df.info()
@@ -41,10 +43,10 @@ df['Core_CPI'] = pd.to_numeric(df['Core_CPI'], errors='coerce')
 #not adding covid dummies because would be cheating as motivation is to find a model that better copes with the post 2020 period
 
 
+#split into one df for core inflation and one for headline inflation
 
-
-
-
+#take log then yearly changes depending on variables maybe also from them
+#why use log: 1. right skewness, 2. stabilize variance, 3. linearize relationship
 
 
 
@@ -59,11 +61,9 @@ df['Core_CPI'] = pd.to_numeric(df['Core_CPI'], errors='coerce')
 #check for NaNs
 nans_per_column = df.isna().sum()
 print(nans_per_column)
-
-#check when NaNs occured:
-all_values_as_string = df['Wage_change'].to_string()
-
-print(all_values_as_string)
+#check which years are missing
+print(df[df['infl_e_current_year'].isna()])
+#only in year 2000-> can ignore as taking yearly change so will use the observation in year 2000 eitherway
 
 
 #Handling NaNs Timeseries appropriately wit linear interpolation 

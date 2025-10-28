@@ -15,7 +15,7 @@ BASE_PATH = script_dir.parent.parent / 'Code'/ 'Data' / 'Raw_Data'
 
 def load_cpi_data(file_path):
     """Load and process CPI inflation data: are year-over-year changes"""
-    cpi_data_wide = pd.read_excel(file_path / 'Inflation.xlsx', sheet_name='VAR_m-12', header=3)
+    cpi_data_wide = pd.read_excel(file_path / 'Inflation.xlsx', sheet_name='INDEX_m', header=3)
     target_rows = ['Total', '    Kerninflation 1']
     filtered_data = cpi_data_wide[cpi_data_wide['Position_D'].isin(target_rows)].copy()
     filtered_data = filtered_data.drop_duplicates()
