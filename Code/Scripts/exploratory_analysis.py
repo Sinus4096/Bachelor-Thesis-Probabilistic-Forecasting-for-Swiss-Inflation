@@ -3,6 +3,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.graphics.tsaplots import plot_pacf
+from statsmodels.tsa.arima_process import ArmaProcess 
 
 
 #do 3,6,9 and 12 month forecasts-> long and short term
@@ -36,6 +39,46 @@ df.info()
 
 #Core_CPI is an object-> coerce to float
 df['Core_CPI'] = pd.to_numeric(df['Core_CPI'], errors='coerce') 
+
+
+#analyze the two y variables Core and Headline CPI:
+fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True)
+
+axes[0].plot(df.index, df['Core_CPI'], label='Core CPI', linewidth=2, color='C0')
+axes[0].set_ylabel('CPI Index')
+axes[0].legend()
+axes[0].grid(True, linestyle=':', alpha=0.7)
+
+axes[1].plot(df.index, df['Headline_CPI'], label='Headline CPI', linewidth=2, color='C1')
+axes[1].set_ylabel('CPI Index')
+axes[1].legend()
+axes[1].grid(True, linestyle=':', alpha=0.7)
+
+fig.suptitle('Time Series of Core and Headline CPI', fontsize=16)
+axes[1].set_xlabel('Date') 
+plt.tight_layout()
+plt.subplots_adjust(top=0.95) 
+plt.show()
+#see clear trend 
+#variance of the series increases with level-> heteroscedasticity
+
+#plot ACF and PACF
+cols_to_analyse = ['Core_CPI', 'Headline_CPI']
+titles = ['Core CPI', 'Headline CPI']
+lags_to_show = 48
+for i, col in enumerate(cols_to_analyse):
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 8))
+    plot_acf(df[col], lags=lags_to_show, ax=axes[0], title='Autocorrelation (ACF)')
+    axes[0].grid(True, linestyle=':', alpha=0.7)
+    plot_pacf(df[col], lags=lags_to_show, ax=axes[1], title='Partial Autocorrelation (PACF)')
+    axes[1].grid(True, linestyle=':', alpha=0.7)
+    fig.suptitle(f'ACF & PACF for {titles[i]}', fontsize=16)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92)
+plt.show()
+
+
+#both ACF's show slow linear decay with all lags being highly significant; is clear indice for strong non-stationary trend
 
 
 #split into train and test set to avoid data leakage
