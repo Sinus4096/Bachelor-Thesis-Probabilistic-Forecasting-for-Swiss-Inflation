@@ -40,6 +40,13 @@ df.info()
 #Core_CPI is an object-> coerce to float
 df['Core_CPI'] = pd.to_numeric(df['Core_CPI'], errors='coerce') 
 
+#check for NaNs
+nans_per_column = df.isna().sum()
+print(nans_per_column)
+#check which years are missing
+print(df[df['infl_e_current_year'].isna()])
+#only in year 2000-> can ignore as taking yearly change so will use the observation in year 2000 eitherway
+
 
 #analyze the two y variables Core and Headline CPI:
 fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True)
@@ -77,8 +84,25 @@ for i, col in enumerate(cols_to_analyse):
     plt.subplots_adjust(top=0.92)
 plt.show()
 
-
 #both ACF's show slow linear decay with all lags being highly significant; is clear indice for strong non-stationary trend
+
+
+
+
+#generally why use log: 1. right skewness, 2. stabilize variance, 3. linearize relationship, here we want to stabilizy variance
+#to detrend: seasonal differencing-> get year-over-year inflation rates
+#shift is fine as we wouldnt have data for the inflation rates outside eitherway
+for col in cols_to_analyse:
+    df[col] = np.log(df[col]).diff(12)
+df.head()
+
+start_date = '2001-05-01'
+end_date = '2025-04-01'
+df = df.loc[start_date:end_date]
+#check for NAN again -> all fine
+nans_per_column = df.isna().sum()
+print(nans_per_column)
+
 
 
 #split into train and test set to avoid data leakage
@@ -89,24 +113,16 @@ plt.show()
 #split into one df for core inflation and one for headline inflation
 
 #take log then yearly changes depending on variables maybe also from them
-#why use log: 1. right skewness, 2. stabilize variance, 3. linearize relationship
 
 
 
 
 
 
+#stabilize the variance
 
 
 
-
-
-#check for NaNs
-nans_per_column = df.isna().sum()
-print(nans_per_column)
-#check which years are missing
-print(df[df['infl_e_current_year'].isna()])
-#only in year 2000-> can ignore as taking yearly change so will use the observation in year 2000 eitherway
 
 
 #Handling NaNs Timeseries appropriately wit linear interpolation 
