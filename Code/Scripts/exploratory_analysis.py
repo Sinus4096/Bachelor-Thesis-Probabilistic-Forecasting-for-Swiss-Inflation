@@ -100,6 +100,7 @@ df.head()
 start_date = '2001-05-01'
 end_date = '2025-04-01'
 df = df.loc[start_date:end_date]
+print(df.tail())
 #check for NAN again -> all fine
 nans_per_column = df.isna().sum()
 print(nans_per_column)
@@ -116,6 +117,8 @@ for col in cols_to_analyse:
     else:
         print("Result: NON-STATIONARY")
 #try first difference to get ridd off the RW 
+
+
 
 
 
