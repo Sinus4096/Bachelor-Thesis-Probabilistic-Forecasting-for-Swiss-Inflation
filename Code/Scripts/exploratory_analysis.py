@@ -27,6 +27,11 @@ Out-of-Sample Evaluation Period:
 This will start after your initial training period. If you train until December 2005, your first out-of-sample forecasts will be for early 2006.
 Your evaluation sample will range from January 2006 (or wherever your first forecast begins) until December 2025.'''
 
+'''Since QRF doesn't inherently "know" the order of time, you must explicitly create lags of your target variable ($\pi_{t-1}, \pi_{t-2}$) and other predictors to capture autoregressive dynamics.
+'''
+'''core Inflation (HICPex): Often exhibits stronger non-linear relationships, particularly with inflation expectations. Studies show QRF is especially competitive and often more accurate for Core than for Headline inflation.
+
+Headline Inflation (HICP): Driven heavily by global commodity prices (energy/food), which typically follow more linear dynamics. While QRF is still a valid tool here, linear models are often very competitive for Headline because these volatile external shocks can "overshadow" the mild non-linearities found in core components.'''
 
 
 path = 'Code/Data/Cleaned_Data/QRF_data.csv'
