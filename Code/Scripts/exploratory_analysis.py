@@ -34,11 +34,11 @@ Your evaluation sample will range from January 2006 (or wherever your first fore
 Headline Inflation (HICP): Driven heavily by global commodity prices (energy/food), which typically follow more linear dynamics. While QRF is still a valid tool here, linear models are often very competitive for Headline because these volatile external shocks can "overshadow" the mild non-linearities found in core components.'''
 
 
-path = 'Code/Data/Cleaned_Data/QRF_data.csv'
+path = 'Code/Data/Cleaned_Data/data_before_split.csv'
 df = pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #look at part where all values exist:
-start_date = '2000-05-01'
+start_date = '2001-05-01'
 end_date = '2025-04-01'
 df = df.loc[start_date:end_date]
 df.info()

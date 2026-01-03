@@ -17,9 +17,9 @@ BASE_PATH =script_dir.parent.parent/'Code'/'Data'/'Raw_Data'
 #define all function to load the raw data
 
 def load_cpi_data(file_path):
-    """load CPI year-over-year changes"""    
+    """load CPI index (will make stationary later)"""    
     #read 'VAR_m-12' sheet 
-    cpi_data_wide =pd.read_excel(file_path/'Inflation.xlsx', sheet_name='VAR_m-12', header=3)
+    cpi_data_wide =pd.read_excel(file_path/'Inflation.xlsx', sheet_name='INDEX_m', header=3)
     #define which rows to extract and filtered df for those
     target_rows=['Total', '    Kerninflation 1']
     filtered_data=cpi_data_wide[cpi_data_wide['Position_D'].isin(target_rows)].copy()
@@ -31,11 +31,20 @@ def load_cpi_data(file_path):
     data_long =data_long.iloc[26:]   
     #date to datetime obj 
     data_long['Date'] =pd.to_datetime(data_long['Date'])
-    
-    final_cpi_df=data_long.pivot(index='Date', columns='Position_D', values='Inflation').reset_index()  #reshape 
-    final_cpi_df.columns=['Date', 'Core_CPI', 'Headline_CPI']   #rename
+    #reshape so cols are the variables
+    final_cpi_df=data_long.pivot(index='Date', columns='Position_D', values='Inflation') 
+
+    #calculate YoY log differences: ln(Index_t) - ln(Index_t-12), multiplied by 100 for percentage scale
+    #log_diff_df=np.log(df_pivot).diff(12) * 100  
+
+    # Rename columns and clean up
+    #final_cpi_df=log_diff_df.reset_index()
+    final_cpi_df.columns=['Core_CPI','Headline_CPI']
+
     #'Date' as index and ensure every month is present (filling missing months with NaN)
-    return final_cpi_df.set_index('Date').resample('MS').asfreq()
+    return final_cpi_df.resample('MS').asfreq()
+
+
 
 
 def load_kof_barometer(file_path):
@@ -110,31 +119,35 @@ def load_oil_prices(file_path):
     return oil_prices.resample('MS').asfreq()
 
 
+
 def load_gdp_ch(file_path):
     """
-    load quarterly (-> ffill) swiss GDP"""
+    load quarterly swiss GDP 
+    """
     gdp=pd.read_excel(file_path/'gdp.xlsx', sheet_name='real_q', header=10)
-    #select year, quarter and percentage change cols
-    gdp = gdp.iloc[:, [0, 1, 3]]
-    gdp.columns=['Year', 'Quarter', 'real_gdp_growth']    #rename
+    
+    #select year, quarter and index level cols, will take log differences or YoY percenage growth after time series analysis is done
+    gdp =gdp.iloc[:, [0, 1, 2]] 
+    gdp.columns =['Year', 'Quarter', 'gdp_index']  #rename    
     #crate the date given year and quarter
-    gdp['Date'] = pd.to_datetime(gdp['Year'].astype(str) + 'Q' + gdp['Quarter'].astype(str))
+    gdp['Date']= pd.to_datetime(gdp['Year'].astype(str)+'Q'+gdp['Quarter'].astype(str))
     gdp.set_index('Date', inplace=True)
+    
+    #calculate log difference: ln(GDP_t) - ln(GDP_t-1) and multiply by 100 for percentage scale (-> stationarity)
+    #use diff(4) because it's quarterly data (4 quarters=1 year)
+    #gdp['gdp_log_diff'] =np.log(gdp['gdp_index']).diff(4)*100
     #fill up missing values (due to monthly data); use forward fill to avoid data leakage
-    return gdp[['real_gdp_growth']].resample('MS').ffill()
+    return gdp[['gdp_index']].resample('MS').ffill()
 
 
 
 def load_gdp_eu(file_path):
     """load EU GDP (quarterly)"""
-    gdp2 =pd.read_excel(file_path/'gdp_EU.xlsx', sheet_name='Quarterly')
-    #calculate the percentage change of gdp?
-    gdp2['gdp_EU_growth']=gdp2['CLVMNACSCAB1GQEU272020'].pct_change()
-    gdp2=gdp2.drop('CLVMNACSCAB1GQEU272020', axis=1)  #drop raw rates
-    gdp2.columns =['Date', 'gdp_EU_growth']    #rename cols
-    gdp2['Date']=pd.to_datetime(gdp2['Date']) #date to datetime object
-    #set date as index and fill up missing months with forward fill as done with swiss gdp growth
-    return gdp2.set_index('Date')[['gdp_EU_growth']].resample('MS').ffill()
+    gdp2=pd.read_excel(file_path/'gdp_EU.xlsx', sheet_name='Quarterly', usecols=[0, 1], names=['Date', 'gdp_index'], parse_dates=['Date'])
+    #set index
+    gdp2.set_index('Date', inplace=True)
+    return gdp2[['gdp_index']].resample('MS').ffill()
+
 
 
 def load_inflation_expectations(file_path):
