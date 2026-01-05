@@ -449,21 +449,6 @@ if __name__ =="__main__":
     CODE_DIR=Path(__file__).parent.parent
     output_path =CODE_DIR /"Data"/"Cleaned_Data"
     output_path.mkdir(parents=True, exist_ok=True) 
-    output_file =output_path /'data_before_split.csv'
+    output_file =output_path /'data_merged.csv'
     data_before_split.to_csv(output_file, index=True)
 
-#look at part where all values exist:
-start_date ='2000-05-01'
-end_date ='2025-04-01'
-data_before_split = data_before_split.loc[start_date:end_date]
-data_before_split.info()
-
-#Core_CPI is an object-> coerce to float
-data_before_split['Core_CPI'] = pd.to_numeric(data_before_split['Core_CPI'], errors='coerce') 
-data_before_split['Headline_CPI'] = pd.to_numeric(data_before_split['Headline_CPI'], errors='coerce') 
-#check for NaNs
-nans_per_column = data_before_split.isna().sum()
-print(nans_per_column)
-#check which years are missing
-print(data_before_split[data_before_split['infl_e_current_year'].isna()])
-#only in year 2000-> can ignore as taking yearly change so will use the observation in year 2000 eitherway
