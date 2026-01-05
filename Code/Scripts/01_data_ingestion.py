@@ -128,7 +128,7 @@ def load_gdp_ch(file_path):
     
     #select year, quarter and index level cols, will take log differences or YoY percenage growth after time series analysis is done
     gdp =gdp.iloc[:, [0, 1, 2]] 
-    gdp.columns =['Year', 'Quarter', 'gdp_index']  #rename    
+    gdp.columns =['Year', 'Quarter', 'gdp_index_ch']  #rename    
     #crate the date given year and quarter
     gdp['Date']= pd.to_datetime(gdp['Year'].astype(str)+'Q'+gdp['Quarter'].astype(str))
     gdp.set_index('Date', inplace=True)
@@ -144,6 +144,8 @@ def load_gdp_ch(file_path):
 def load_gdp_eu(file_path):
     """load EU GDP (quarterly)"""
     gdp2=pd.read_excel(file_path/'gdp_EU.xlsx', sheet_name='Quarterly', usecols=[0, 1], names=['Date', 'gdp_index'], parse_dates=['Date'])
+    #rename cols
+    gdp2.columns=['Date', 'gdp_index_eu']
     #set index
     gdp2.set_index('Date', inplace=True)
     return gdp2[['gdp_index_eu']].resample('MS').ffill()

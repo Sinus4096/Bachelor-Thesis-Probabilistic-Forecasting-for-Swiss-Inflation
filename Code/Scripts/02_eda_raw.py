@@ -9,7 +9,8 @@ from statsmodels.tsa.arima_process import ArmaProcess
 from statsmodels.tsa.stattools import adfuller
 import math
 from tabulate import tabulate
-
+from statsmodels.tsa.seasonal import seasonal_decompose
+import matplotlib.ticker as mticker
 
 #do 3,6,9 and 12 month forecasts-> long and short term
 #compare with out of sample method-> data got up to then model's recursive forecasting vintages, find the corresponding benchmark vintage
@@ -219,26 +220,25 @@ plt.show()
 
 #want to check for all variables at once
 all_vars=['Core_CPI', 'Headline_CPI'] +x_variables
-#setup grid
-n_vars =len(all_vars)
-fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(12, n_vars * 3))
 #set colors
 color_acf ='#2E5A88' 
 
 #restrict number of figures to 5
 vars_per_fig=4
+#def chunknr for title
+chunk_nr=1
 
 #loop through variables in chunks
 for start_idx in range(0, len(all_vars), vars_per_fig):
     
     #def current chunk
     chunk =all_vars[start_idx: start_idx+vars_per_fig]
-    n_vars =len(chunk)    
+    n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
     
     # Create fig. squeeze=False ensures 'axes' is ALWAYS a 2D array [row, col]
     fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
     
-    #loop through vars in chunk?
+    #loop through vars in chunk
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df[var_name].dropna()
@@ -256,9 +256,14 @@ for start_idx in range(0, len(all_vars), vars_per_fig):
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
             ax.set_ylim(-1.1, 1.1)
             ax.tick_params(axis='both', which='major', labelsize=10)
+    #figure title for all chunks
+    fig.suptitle(f'ACF & PACF Plots of all Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
     plt.show()
+    #add 1 to chunknr for next chunk plot
+    chunk_nr+=1
+
 
 
 #observations:
@@ -340,6 +345,124 @@ print("\n Augmented Dickey-Fuller Test Results: ")
 print(adf_table) 
 
 
+#identified problem with AIC:
+#AIC is great to pick "best" lag, but for M1/M2/M3 it's picking 15+ lags-> it means that the model is struggling to clear out the noise.
+#Furthermore for monthly data with seasonality, the test can miss the 12th month if we don't allow it to look far enough.
+# what to do? seasonal decomposition of specific vars and for some difference and then redo acf, pacf and adf
+# which vars? the ones with high ADF p-values and high lag counts, like retail_turnover (11 lags) and the M-changes (15-16 lags)
+# (as these often hide seasonal patterns)
+
+
+
+
+
+
+
+
+
+#---------------------------------
+#Analysis for seasonality
+#---------------------------------
+#1 Analysis of variables with high AIC lags chosen by AIC in ADF test that might have hidden cycles
+high_lag_vars=['unemployment_rate', 'M1_change', 'M2_change', 'M3_change', 'infl_e_next_year']
+#loop through these vars
+for var in high_lag_vars:
+    series = df[var].dropna()
+    result = seasonal_decompose(series, model='additive', period=12)
+    
+    # Create a custom figure to replace the default result.plot()
+    fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
+    
+    # 1. Observed
+    axes[0].plot(series, color='#1f77b4', linewidth=1.5)
+    axes[0].set_title(f'Analysis of {var}', fontsize=14, fontweight='bold', loc='left')
+    axes[0].set_ylabel('Observed')
+    
+    # 2. Trend
+    axes[1].plot(result.trend, color='#ff7f0e', linewidth=2)
+    axes[1].set_ylabel('Trend')
+    
+    # 3. Seasonal
+    axes[2].plot(result.seasonal, color='#2ca02c')
+    axes[2].set_ylabel('Seasonal')
+    # Calculate the average magnitude of seasonality as a % of the mean trend
+    seasonal_pct = (result.seasonal.abs().mean() / result.trend.mean()) * 100
+    axes[2].annotate(f'Avg Seasonal Impact: {seasonal_pct:.2f}%', 
+                     xy=(0.02, 0.85), xycoords='axes fraction', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+    
+    # 4. Residuals (Noise)
+    axes[3].scatter(series.index, result.resid, s=10, color='#d62728', alpha=0.5)
+    axes[3].axhline(0, color='black', lw=1, ls='--')
+    axes[3].set_ylabel('Residuals')
+
+    # General Styling for all subplots
+    for ax in axes:
+        ax.grid(True, which='major', linestyle='--', alpha=0.6)
+        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6)) # More ticks on Y axis
+        ax.tick_params(axis='y', labelsize=9)
+
+    plt.xlabel('Date')
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+#2. vars with strong trend:
+#trend is so dominant that it hides seasonal signa, once calculate the log-growth ratem, trend is removed-> hidden seasonal spikes will become visible.
+trending_vars=['Core_CPI', 'Headline_CPI', 'gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans']
+
+#take log growth rates 
+df_growth=np.log(df[trending_vars]).diff().dropna()
+
+#start the plotting to see if there is seasonal pattern now:
+#set colors
+color_acf ='#2E5A88' 
+#restrict number of figures to 5
+vars_per_fig=4
+#def chunknr for title
+chunk_nr=1
+
+#loop through variables in chunks
+for start_idx in range(0, len(trending_vars), vars_per_fig):
+    
+    #def current chunk
+    chunk =trending_vars[start_idx: start_idx+vars_per_fig]
+    n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
+    
+    #create figure 
+    fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
+    
+    #loop through vars in chunk
+    for i, var_name in enumerate(chunk):
+        #get data and drop NA's (before 2001)
+        series=df_growth[var_name].dropna()
+        
+        #acf plot
+        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #pacf plot
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #styling
+        for ax in axes[i]:
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            ax.set_ylim(-1.1, 1.1)
+            ax.tick_params(axis='both', which='major', labelsize=10)
+    #figure title for all chunks
+    fig.suptitle(f'ACF & PACF Plots of Detrended Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
+    #plot
+    plt.tight_layout()
+    plt.show()
+    #add 1 to chunknr for next chunk plot
+    chunk_nr+=1
+
+
+
+
 
 #-----------------------------------------------
 #Result Overview
@@ -350,7 +473,7 @@ print(adf_table)
 #write a summary of the results seen above
 data =[{"Variable": "CPI Targets (Core/Headline)", "Time Series Visual": "Persistent upward trend; acceleration post-2021.", "ACF/PACF Pattern": "Very slow ACF decay; PACF spike at lag 1.",
         "ADF Result (p-value)": "Non-Stationary (0.85 /0.81)", "How to proceed": "Use Log-Growth Rates (Inflation)."},
-    {"Variable": "GDP Indices (x and y)", "Time Series Visual": "Smooth, continuous upward trend since 2000.", "ACF/PACF Pattern": "Extremely high ACF persistence (near 1.0).",
+    {"Variable": "GDP Indexes (ch and eu)", "Time Series Visual": "Smooth, continuous upward trend since 2000.", "ACF/PACF Pattern": "Extremely high ACF persistence (near 1.0).",
         "ADF Result (p-value)": "Non-Stationary (0.95 /0.89)", "How to proceed": "Use Log-Growth Rates."},
     {"Variable": "Sentiment (KOF /Business Conf.)", "Time Series Visual": "Mean-reverting; cyclical 'waves' around a constant.",
         "ACF/PACF Pattern": "ACF drops to zero quickly; some oscillation.", "ADF Result (p-value)": "Stationary (0.000)","How to proceed": "Use Levels (Raw data)."},
