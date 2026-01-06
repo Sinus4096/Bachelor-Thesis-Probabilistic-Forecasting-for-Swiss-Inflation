@@ -9,8 +9,7 @@ from statsmodels.tsa.arima_process import ArmaProcess
 from statsmodels.tsa.stattools import adfuller
 import math
 from tabulate import tabulate
-from statsmodels.tsa.seasonal import seasonal_decompose
-import matplotlib.ticker as mticker
+
 
 #do 3,6,9 and 12 month forecasts-> long and short term
 #compare with out of sample method-> data got up to then model's recursive forecasting vintages, find the corresponding benchmark vintage
@@ -51,11 +50,11 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 #set style
 plt.style.use('seaborn-v0_8-whitegrid')
 #create a grid
-fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True, gridspec_kw={'hspace': 0.1})
+fig, axes=plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True, gridspec_kw={'hspace': 0.1})
 
 #define color palette
-core_color = '#2E5A88'      
-headline_color = '#D97B42'  
+core_color='#2E5A88'      
+headline_color='#D97B42'  
 #core cpi plot
 axes[0].plot(df.index, df['Core_CPI'], label='Core CPI', linewidth=2.5, color=core_color)
 #fill subtle
@@ -348,7 +347,7 @@ print(adf_table)
 #identified problem with AIC:
 #AIC is great to pick "best" lag, but for M1/M2/M3 it's picking 15+ lags-> it means that the model is struggling to clear out the noise.
 #Furthermore for monthly data with seasonality, the test can miss the 12th month if we don't allow it to look far enough.
-# what to do? seasonal decomposition of specific vars and for some difference and then redo acf, pacf and adf
+# what to do? for specific vars difference and then redo acf, pacf and adf
 # which vars? the ones with high ADF p-values and high lag counts, like retail_turnover (11 lags) and the M-changes (15-16 lags)
 # (as these often hide seasonal patterns)
 
@@ -363,58 +362,12 @@ print(adf_table)
 #---------------------------------
 #Analysis for seasonality
 #---------------------------------
-#1 Analysis of variables with high AIC lags chosen by AIC in ADF test that might have hidden cycles
-high_lag_vars=['unemployment_rate', 'M1_change', 'M2_change', 'M3_change', 'infl_e_next_year']
-#loop through these vars
-for var in high_lag_vars:
-    series = df[var].dropna()
-    result = seasonal_decompose(series, model='additive', period=12)
-    
-    # Create a custom figure to replace the default result.plot()
-    fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
-    
-    # 1. Observed
-    axes[0].plot(series, color='#1f77b4', linewidth=1.5)
-    axes[0].set_title(f'Analysis of {var}', fontsize=14, fontweight='bold', loc='left')
-    axes[0].set_ylabel('Observed')
-    
-    # 2. Trend
-    axes[1].plot(result.trend, color='#ff7f0e', linewidth=2)
-    axes[1].set_ylabel('Trend')
-    
-    # 3. Seasonal
-    axes[2].plot(result.seasonal, color='#2ca02c')
-    axes[2].set_ylabel('Seasonal')
-    # Calculate the average magnitude of seasonality as a % of the mean trend
-    seasonal_pct = (result.seasonal.abs().mean() / result.trend.mean()) * 100
-    axes[2].annotate(f'Avg Seasonal Impact: {seasonal_pct:.2f}%', 
-                     xy=(0.02, 0.85), xycoords='axes fraction', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
-    
-    # 4. Residuals (Noise)
-    axes[3].scatter(series.index, result.resid, s=10, color='#d62728', alpha=0.5)
-    axes[3].axhline(0, color='black', lw=1, ls='--')
-    axes[3].set_ylabel('Residuals')
-
-    # General Styling for all subplots
-    for ax in axes:
-        ax.grid(True, which='major', linestyle='--', alpha=0.6)
-        ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=6)) # More ticks on Y axis
-        ax.tick_params(axis='y', labelsize=9)
-
-    plt.xlabel('Date')
-    plt.tight_layout()
-    plt.show()
-
-
-
-
-
-#2. vars with strong trend:
+#1. vars with strong trend:
 #trend is so dominant that it hides seasonal signa, once calculate the log-growth ratem, trend is removed-> hidden seasonal spikes will become visible.
 trending_vars=['Core_CPI', 'Headline_CPI', 'gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans']
 
-#take log growth rates 
-df_growth=np.log(df[trending_vars]).diff().dropna()
+#take log growth rates (*100 to have % changes)
+df_growth=np.log(df[trending_vars]).diff().dropna()*100
 
 #start the plotting to see if there is seasonal pattern now:
 #set colors
@@ -428,7 +381,7 @@ chunk_nr=1
 for start_idx in range(0, len(trending_vars), vars_per_fig):
     
     #def current chunk
-    chunk =trending_vars[start_idx: start_idx+vars_per_fig]
+    chunk=trending_vars[start_idx: start_idx+vars_per_fig]
     n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
     
     #create figure 
@@ -459,8 +412,80 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
     plt.show()
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
+    
+#all look good except for core and headline cpi: have clear trend appearing in the acf plot-> will take YoY changes for the two:  
+#first drop the two cpi cols bc want to replace them with their yoy changes 
+df_growth=df_growth.drop(['Core_CPI', 'Headline_CPI'], axis=1)
+#calculate yoy changes
+df_growth[['Core_CPI', 'Headline_CPI']]= np.log(df[['Core_CPI', 'Headline_CPI']]).diff()*100 
+#check whether cols exist now:
+df_growth.columns
+#redo acf check for the two cols to check whether looks stationary now:
+#define fig
+fig, axes=plt.subplots(nrows=len(targets), ncols=2, figsize=(16, 10))
+#loop through the target variables
+for i, var_name in enumerate(targets):
+        #get data and drop NA's
+        series=df_growth[var_name].dropna()
+        #acf plot
+        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})        
+        #pacf plot
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #styling
+        for ax in axes[i]:
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            ax.set_ylim(-1.1, 1.1)
+            ax.tick_params(axis='both', which='major', labelsize=10)
+#figure title for all chunks
+fig.suptitle(f'ACF & PACF Plots of YoY %-Changes of CPI Variables', fontsize=22, fontweight='bold')
+#plot
+plt.tight_layout()
+plt.show()
+
+#do adf test
+adf_results=[]
+#loop through all variables of df
+for col in df_growth.columns:
+    #all cols shoul dbe float (from preprocessing) but still check to avoid errors
+    if pd.api.types.is_numeric_dtype(df_growth[col]):
+        res=run_adf_test(df_growth[col], col)
+        adf_results.append(res)
+
+#to df for nice tabular display
+adf_table=pd.DataFrame(adf_results)
+#display the table
+print("\n Augmented Dickey-Fuller Test Results for Trending Variables: ")
+print(adf_table) 
+#decision for CPI: like reference paper see word document.
 
 
+#2. simple differencing for non-stationary variables:
+#these variables were non-stationary in the adf test but looked stationary: try to difference once and redo adf test:
+
+non_s_vars= ['Wage_change','Exchange_Rate_CHF','M3_change']
+#take differences of those 
+df_non_s = df[non_s_vars].diff().dropna()
+
+#rerun adf for differenced vars:
+
+#initialize list for resutls
+adf_results=[]
+#loop through all variables of df
+for col in df_non_s.columns:
+    #all cols shoul dbe float (from preprocessing) but still check to avoid errors
+    if pd.api.types.is_numeric_dtype(df_non_s[col]):
+        res=run_adf_test(df_non_s[col], col)
+        adf_results.append(res)
+
+
+#to df for nice tabular display
+adf_table=pd.DataFrame(adf_results)
+#display the table
+print("\n Augmented Dickey-Fuller Test Results for Non-Stationary Variables: ")
+print(adf_table) 
 
 
 
