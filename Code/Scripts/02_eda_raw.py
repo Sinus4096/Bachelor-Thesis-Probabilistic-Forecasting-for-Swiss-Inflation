@@ -417,7 +417,7 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
 #first drop the two cpi cols bc want to replace them with their yoy changes 
 df_growth=df_growth.drop(['Core_CPI', 'Headline_CPI'], axis=1)
 #calculate yoy changes
-df_growth[['Core_CPI', 'Headline_CPI']]= np.log(df[['Core_CPI', 'Headline_CPI']]).diff()*100 
+df_growth[['Core_CPI', 'Headline_CPI']]= np.log(df[['Core_CPI', 'Headline_CPI']]).diff(12)*100 
 #check whether cols exist now:
 df_growth.columns
 #redo acf check for the two cols to check whether looks stationary now:
@@ -459,6 +459,8 @@ adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results for Trending Variables: ")
 print(adf_table) 
+#remark: we saw that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
+#as the acf shows clear seasonal spikes when taking diff alone it's not stationary either
 #decision for CPI: like reference paper see word document.
 
 
