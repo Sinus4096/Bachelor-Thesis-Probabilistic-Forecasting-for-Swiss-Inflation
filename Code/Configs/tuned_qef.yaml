@@ -1,0 +1,17 @@
+#config file to run the tuned qrf to compare
+experiment_name: "QRF_Tuned_3m"
+model_type: "qrf"
+#define the data used in the experiment
+data:
+  file_path: "Code/Data/Stationary_Data/data_merged_stationary.csv"
+  horizon: 3  #comparison on 3 month forecasting horizong
+  target_variable: "target_headline_3m"
+  test_size: 0.2  #use 80% of data for training
+#specify model 
+model:
+  tune_hyperparameters: true   #use hyperparameter tuning
+  #define search space
+  param_grid:
+    n_estimators: [500, 1000, 1500, 2000]
+    min_samples_leaf: [2, 5, 10, 20, 50]
+    max_features: ["sqrt", "log2", 0.33]      

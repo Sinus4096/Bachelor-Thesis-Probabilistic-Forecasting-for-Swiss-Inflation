@@ -1,0 +1,19 @@
+#config file to run the default qrf used by the ecb and proposed by Meinshausen
+experiment_name: "QRF_Default_3m"
+model_type: "qrf"
+
+#define the data used in the experiment
+data:
+  file_path: "Code/Data/Stationary_Data/data_merged_stationary.csv"
+  horizon: 3     #comparison on 3 month forecasting horizong
+  target_variable: "target_headline_3m"   
+  test_size: 0.2    #use 80% for training    
+#specify default model           
+model:
+  tune_hyperparameters: false    #use the default model
+  params:
+    n_estimators: 1000
+    min_samples_leaf: 5
+    max_features: "sqrt"
+    n_jobs: -1
+    random_state: 42

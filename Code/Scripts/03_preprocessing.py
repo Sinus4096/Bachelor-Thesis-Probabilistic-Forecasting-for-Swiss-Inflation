@@ -37,8 +37,9 @@ df_stationary.head()
 #through differencing first year have no data for core and headline cpi anymore (-> which is why we didnt drop the inflation expectations
 #during data ingestion)-> set new starting date at one year later:
 start_date ='2001-05-01'
-end_date='2025-04-01'
-df_stationary =df_stationary.loc[start_date:end_date]
+#end so have the latest months
+df_stationary=df_stationary.loc[start_date:] 
+
 #check again
 df_stationary.head()
 #look if no NA's anymore:
@@ -60,29 +61,51 @@ for i in lags_to_keep:
     df_stationary[f'headline_lag_{i}']=df_stationary['Headline_CPI'].shift(i)
     df_stationary[f'core_lag_{i}']=df_stationary['Core_CPI'].shift(i)
 
-# Drop the rows that now have NaNs (this will drop only 6 months, not 12)
-df_model= df_stationary.dropna()
+#drop the rows that now have NaNs 
+df_stationary= df_stationary.dropna()
+
+
+
+#--------------------------
+#add sine and cosine transformations
+#--------------------------------
+
+#calculate them now, but config file will decide later whether to use them or drop them.
+
+df_stationary['month'] =df_stationary.index.month #define month column from date index
+#add sine and cosine transformations of the Annual Cycle (->/12)
+df_stationary['month_sin']= np.sin(2*np.pi*df_stationary['month'] /12)
+df_stationary['month_cos']= np.cos(2*np.pi*df_stationary['month']/12)
+# Drop the raw 'month' column if you only want the cyclic encoding
+df_stationary = df_stationary.drop(columns=['month'])
+
 
 #---------------------------
 #create forecast horizons / shift targets
 #----------------------------------------
 #reason: need data of today to predict three months ahead
 
-# Create targets for 3, 6, 9, and 12 months ahead
+#create targets for 3, 6, 9, and 12 months ahead
 horizons= [3, 6, 9, 12]
 
 for h in horizons:
     df_stationary[f'target_headline_{h}m']= df_stationary['Headline_CPI'].shift(-h)
     df_stationary[f'target_core_{h}m']= df_stationary['Core_CPI'].shift(-h)
 
-#from lagging and shifting have some additional lags
-df_stationary=df_stationary.dropna()
-
-#see how much data still availabe:
-df_stationary.head()
+#see if worked:
 df_stationary.tail()
+#do not drop NA's here: need the bottom rows later to predict the "future"
 
-#--------------------------
-#add sine and cosine transformations
-#--------------------------------
+
+
+#--------------------------------------
+#save the DF
+#----------------------------------------
+#define path to csv directory
+CODE_DIR=Path(__file__).parent.parent
+output_path=CODE_DIR /"Data"/"Cleaned_Data"
+#print the processed df to outputpath
+output_file=output_path/'data_stationary.csv'
+df_stationary.to_csv(output_file, index=True)
+
 

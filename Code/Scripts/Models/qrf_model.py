@@ -8,14 +8,15 @@ import os
 
 
 #load Data
-df = pd.read_csv('../../Data/Cleaned_Data/QRF_data.csv')
-# Assuming 'target' is your inflation column and the rest are predictors
-X = df.drop(columns=['target']) 
-y = df['target']
+df= pd.read_csv('../../Data/Cleaned_Data/QRF_data.csv')
+#split to X and Y
+#----
+X= df.drop(columns=['target']) 
+y= df['target']
 
 
 
-#prepare data: time series split to avoid shuffling 
+#split data into train and test data (using 20% test data)
 split_idx = int(len(X) * 0.8)
 X_train, X_test = X[:split_idx], X[split_idx:]
 y_train, y_test = y[:split_idx], y[split_idx:]
