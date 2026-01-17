@@ -1,19 +1,26 @@
 #config file to run the default qrf used by the ecb and proposed by Meinshausen
-experiment_name: "QRF_Default_3m"
+experiment_name: "QRF_Default"
 model_type: "qrf"
 
 #define the data used in the experiment
 data:
-  file_path: "Code/Data/Stationary_Data/data_merged_stationary.csv"
-  horizon: 3     #comparison on 3 month forecasting horizong
-  target_variable: "target_headline_3m"   
-  test_size: 0.2    #use 80% for training    
+  targets: ["Headline", "Core"]     #define the target variables to devide in X and Y
+  horizons: [3, 6, 9, 12]   #comparison on predefined list of forecast horizons    
+  #recursive updating settings (out-of-sample predictions like in ECB paper):
+  evaluation_scheme: "expanding_window"
+  eval_start_date: "2015-01-01"     #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
+
 #specify default model           
 model:
   tune_hyperparameters: false    #use the default model
   params:
-    n_estimators: 1000
-    min_samples_leaf: 5
-    max_features: "sqrt"
-    n_jobs: -1
-    random_state: 42
+    n_estimators: 500    #nr. of decision trees used: ECB used 500
+    min_samples_leaf: 10    #meinshausen and ECB proposed 10 by default
+    max_features: 0.33    #how many features tree allowed to look at; ECB used 0.33
+    n_jobs: -1    #use all CPU power
+    random_state: 42    #for reproducibility: seed
+
+
+
+

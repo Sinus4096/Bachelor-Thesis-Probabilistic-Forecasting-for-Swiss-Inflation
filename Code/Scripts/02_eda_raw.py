@@ -467,6 +467,10 @@ print(adf_table)
 #2. simple differencing for non-stationary variables:
 #these variables were non-stationary in the adf test but looked stationary: try to difference once and redo adf test:
 
+
+#Exchange_Rate	Difference (Log)	% Appreciation/Depreciation	Highly Recommended. Levels are useless for forecasting here.
+#Wage_change	Caution	Wage Acceleration	Check plot first. If it looks like it fluctuates around a mean, do not difference. Only difference if there is a clear upward/downward trend in the growth rate itself.
+#M3_change	Caution	Monetary Impulse	Check plot first. M3 growth is volatile. Differencing it creates "noise on noise," which might confuse the Random Forest
 non_s_vars= ['Wage_change','Exchange_Rate_CHF','M3_change']
 #take differences of those 
 df_non_s = df[non_s_vars].diff().dropna()
