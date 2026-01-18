@@ -9,24 +9,13 @@ data:
   retrain_step_months: 3 #update forecast every quarter, see reasoning in thesis
 #define the model
 model:
-  prior_type: "independent_niw" #use independent NIW prior
+  prior_type: "niw" #use independent NIW prior
   #def hierarchical hyperparameters (based on Korobilis 2020)
   params:
-    lambda:                     
-      mode: "estimated"         # Estimated via MCMC sampling
-      hyperprior: "gamma"
-      
-    mu: 0 #center at 0 for stationary growth rates
-    nu: "n_vars+2"            # Smallest df to ensure proper density
+    sampling_iters: 12000 #number of Gibbs sampling iterations
+    #Hyperparameters for lambda grid search
+    lambda_grid_start: 0.01 #start value for overall tightness grid search
+    lambda_grid_end: 2.0 #end value for overall tightness grid search
+    lambda_grid_steps: 50 #steps taken
 
-    # Deterministics (Trigonometric Seasonality)
-    # ----------------------------------------------------------------------------
-    seasonality: "trig"         # Prevents overfitting compared to 12 dummies
-    exog_priors: "flat"         # No shrinkage on seasonal/constant terms
-
-  # Sampling Logic for Independent NIW
-  # ----------------------------------------------------------------------------
-  sampling:
-    method: "metropolis_hastings" 
-    n_draws: 10000              # Total posterior draws
-    burn_in: 2000               # Discard initial draws for stability
+    #degree of freedom nu is handled via n_vars+2 in the code

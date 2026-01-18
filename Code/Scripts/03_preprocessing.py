@@ -66,14 +66,17 @@ for i in [1, 2]:
 
 
 #--------------------------
-#add Monthly Cycle features
+#add Monthly Cycle features: sine/consine transformations or Dummies?
 #--------------------------------
-#why dummies and not sine/cosine?: Swiss data, Monthly Dummies are preferred over smooth Sine/Cosine waves because 
-#they better capture sharp seasonal spikes.
-#convert month to dummies
-dummies=pd.get_dummies(df_stationary.index.month, prefix='Month').astype(int)
-dummies.index=df_stationary.index   #ensure same index
-df_stationary=pd.concat([df_stationary, dummies], axis=1)   #add to df_stationary
+#are better than adding monthly dummies for bvar model as they do not eat up so many degrees of freedom
+period = 12
+#get the month index (1-12)
+month_idx=df_stationary.index.month
+
+#generate 2 Fourier pairs->capture the main annual and semi-annual cycles
+for i in range(1, 3):  
+    df_stationary[f'sin_cycle_{i}']= np.sin(2* np.pi*i*month_idx/period)
+    df_stationary[f'cos_cycle_{i}'] = np.cos(2* np.pi*i*month_idx /period)
 #check
 print(df_stationary.head())
 #---------------------------

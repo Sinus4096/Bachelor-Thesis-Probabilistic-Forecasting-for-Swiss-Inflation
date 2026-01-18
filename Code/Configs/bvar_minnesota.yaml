@@ -10,16 +10,9 @@ data:
 #define the model  
 model:
   prior_type: "minnesota"
+  shrinkage: "hierarchical"   #use hierarchical shrinkage: GLP Optimization
   #def hierarchical hyperparameters (Giannone et al. 2015 logic)
   params:
-    lambda:                     # Overall tightness hyperparameter
-      mode: "estimated"         # Estimated via Marginal Likelihood
-      hyperprior: "gamma"       # Standard diffuse prior for lambda
-      init_value: 0.2           # Starting point for the numerical optimizer
-      
-    theta: 0.5  #relative tightness for other variables' lags
+    lambda: 0.2    #initial value for overall tightness (will optimize)
+    theta: 0.5  #leave for documentation, is implicitly handled by standardization
     
-    # Seasonality & Deterministics
-    # ----------------------------------------------------------------------------
-    seasonality: "trig"         # Sine/Cosine pairs (2 pairs = 4 features)
-    phi_det: 10000              # Very loose prior on deterministics; let data speak
