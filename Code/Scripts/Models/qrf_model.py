@@ -1,17 +1,22 @@
+from pathlib import Path
 import pandas as pd
+from pyparsing import Path
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from Utils.metrics import qrf_crps_scorer, calculate_crps
+from pathlib import Path
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
 def load_config(config_path):
     """
     helper fct to load the config files
     """
-    with open(config_path, 'r') as f:
+    #convert path:ensure it works across different OS/environments
+    absolute_path = Path(config_path).resolve()
+    with open(absolute_path, 'r') as f:
         return yaml.safe_load(f)
 
 
@@ -144,7 +149,7 @@ def run_experiment(config):
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/recursive_{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments/recursive_{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 
@@ -156,6 +161,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     with open(args.config, 'r') as f:
-        conf = yaml.safe_load(f)
+        conf=yaml.safe_load(f)
         
     run_experiment(conf)

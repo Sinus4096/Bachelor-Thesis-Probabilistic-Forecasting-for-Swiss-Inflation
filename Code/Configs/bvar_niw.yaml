@@ -1,0 +1,32 @@
+#config file for BVAR model with NIW prior
+experiment_name: "bvar_niw_hierarchical"
+model_type: "BVAR"
+#define the data used in the experiment
+data:
+  targets: ["Headline", "Core"] #define the target variables to devide in X and Y
+  horizons: [3, 6, 9, 12] #comparison on predefined list of forecast horizons
+  eval_start_date: "2015-01-01" #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  retrain_step_months: 3 #update forecast every quarter, see reasoning in thesis
+#define the model
+model:
+  prior_type: "independent_niw" #use independent NIW prior
+  #def hierarchical hyperparameters (based on Korobilis 2020)
+  params:
+    lambda:                     
+      mode: "estimated"         # Estimated via MCMC sampling
+      hyperprior: "gamma"
+      
+    mu: 0 #center at 0 for stationary growth rates
+    nu: "n_vars+2"            # Smallest df to ensure proper density
+
+    # Deterministics (Trigonometric Seasonality)
+    # ----------------------------------------------------------------------------
+    seasonality: "trig"         # Prevents overfitting compared to 12 dummies
+    exog_priors: "flat"         # No shrinkage on seasonal/constant terms
+
+  # Sampling Logic for Independent NIW
+  # ----------------------------------------------------------------------------
+  sampling:
+    method: "metropolis_hastings" 
+    n_draws: 10000              # Total posterior draws
+    burn_in: 2000               # Discard initial draws for stability

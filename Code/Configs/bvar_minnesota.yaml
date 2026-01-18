@@ -1,0 +1,25 @@
+#config file for BVAR model with Minnesota prior
+experiment_name: "bvar_minnesota"
+model_type: "BVAR"
+#define the data used in the experiment
+data:
+  targets: ["Headline", "Core"]    #define the target variables to devide in X and Y
+  horizons: [3, 6, 9, 12]    #comparison on predefined list of forecast horizons
+  eval_start_date: "2015-01-01"        #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
+#define the model  
+model:
+  prior_type: "minnesota"
+  #def hierarchical hyperparameters (Giannone et al. 2015 logic)
+  params:
+    lambda:                     # Overall tightness hyperparameter
+      mode: "estimated"         # Estimated via Marginal Likelihood
+      hyperprior: "gamma"       # Standard diffuse prior for lambda
+      init_value: 0.2           # Starting point for the numerical optimizer
+      
+    theta: 0.5  #relative tightness for other variables' lags
+    
+    # Seasonality & Deterministics
+    # ----------------------------------------------------------------------------
+    seasonality: "trig"         # Sine/Cosine pairs (2 pairs = 4 features)
+    phi_det: 10000              # Very loose prior on deterministics; let data speak
