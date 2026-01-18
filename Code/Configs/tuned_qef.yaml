@@ -17,7 +17,7 @@ model:
   param_grid:
     n_estimators: [500,750, 1000]   #nr. of decision trees used: while Meinshausen proposed 1000 by default, ECB used 500
                                 #for 250-300 rows, 1000 trees should be more than enough to capture the patterns
-    min_samples_leaf: [2, 5, 10, 20]  #min of data points allowed in final leaf (Meinshausen default:" have more than 10 observations in each node"; ECB did same default)
-    max_features: ["sqrt", "log2", 0.333]     #how many features tree allow to look at (ECB uses 0.333; sqrt is standard default in literature)
+    min_samples_leaf: [5, 10, 20]  #min of data points allowed in final leaf (Meinshausen default:" have more than 10 observations in each node"; ECB did same default)
+    max_features: ["sqrt", 0.333]     #how many features tree allow to look at (ECB uses 0.333; sqrt is standard default in literature)
     n_jobs: -1    #use all CPU power 
     random_state: 42    #for reproducibility: seed

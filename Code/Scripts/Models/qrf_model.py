@@ -3,12 +3,10 @@ import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.metrics import make_scorer, mean_squared_error, mean_absolute_error
-import sys
-import os
 import yaml
 import argparse
 from pathlib import Path
-from Code.Scripts.Utils.metrics import crps_score 
+from Utils.metrics import qrf_crps_scorer, calculate_crps
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
 def load_config(config_path):
@@ -49,6 +47,40 @@ def run_experiment(config):
                 continue
             #to follow the recursive testing, we don't drop rows where target_col is NAN but filter data available at that specific point in time:
             target_cols_to_drop= [col for col in df.columns if 'target_' in col]    #don't want target variable in X later
+
+            final_params={} #initialize params for loop
+            #check if we need to tune or default
+            if config['model'].get('tune_hyperparameters', False):
+                #get data to tune on (up until eval_start_date)
+                split_idx= df.index.searchsorted(eval_start_date)
+                df_tune= df.iloc[:split_idx].copy().dropna(subset=[target_col]) #define df for tuning up until eval_start_date, why drop NA?????????????????????????????????????????????????????????????????????????????????????????????????
+                #define X and Y 
+                X_tune =df_tune.drop(columns=target_cols_to_drop)
+                y_tune=df_tune[target_col]
+                #get model infos
+                raw_grid= config['model']['param_grid']
+                #initialize grids
+                search_space={}
+                fixed_params ={}
+                #randomizedsearchcv needs lists-> transfrom
+                for k, v in raw_grid.items():
+                    if isinstance(v, list):
+                        search_space[k] = v
+                    else:
+                        fixed_params[k] = v
+                #define model for cross-validation
+                tscv=TimeSeriesSplit(n_splits=5)
+                base_model= RandomForestQuantileRegressor(**fixed_params)
+                search = RandomizedSearchCV(estimator=base_model, param_distributions=search_space, n_iter=15, scoring=qrf_crps_scorer,
+                                            cv=tscv, n_jobs=-1, random_state=42)
+                search.fit(X_tune, y_tune)
+
+                #combine fixed parameters with best found params
+                final_params= {**fixed_params, **search.best_params_}
+            #if don't need to tune: dfault
+            else:
+                final_params= config['model']['params']
+            
             recursive_preds = []    #initialize storage for out-of-sample predictions
             #start time loop at eval_start_date-> get index location of eval_start_date 
             start_idx = df.index.get_loc(eval_start_date)
@@ -78,114 +110,54 @@ def run_experiment(config):
                 Y_train = Y_slice.iloc[train_indices]
                 X_test = X_slice.iloc[test_indices]
                 Y_test =Y_slice.iloc[test_indices]
-
                 #only drop NAN's for the training set: test might have NAN's in the end-> inference
+                Y_train= Y_train.dropna()
+                X_train= X_train.loc[Y_train.index]
 
 
+                #use final params determined by which model use
+                model_args=final_params.copy()
+
+                #train model
+                model= RandomForestQuantileRegressor(**model_args)
+                model.fit(X_train, Y_train)
+
+                #predict key quantiles for evaluation and plotting
+                plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
+                preds_plot= model.predict(X_test, quantile=plot_quantiles)    #pre safe the predictions
+                
+                #predict dense grid for CRPS and fan charts
+                eval_quantiles= np.linspace(0.01, 0.99, 99)
+                preds_dense = model.predict(X_test, quantile=eval_quantiles)
+                #store the resultes nicer in predefined list
+                for idx, date_idx in enumerate(test_indices):
+                     #check if have target for evaluation
+                     actual_val= Y_test.iloc[idx]
+                     #calc step-specific CRPS 
+                    step_crps=calculate_crps([actual_val], preds_dense[idx:idx+1], eval_quantiles)
+                     #make dic of result
+                    result={'Date':df.index[date_idx], 'Actual': actual_val, 'Forecast_median': preds_plot[idx,2],'q05': preds_plot[idx,0],
+                             'q16':preds_plot[idx,1], 'q84': preds_plot[idx, 3],'q95': preds_plot[idx, 4], 'Steps_CRPS': step_crps}
+                    #append
+                    recursive_preds.append(result)
+                #advance window 1quarter
+                current_idx= next_step_idx
+            
+            #save and evaluate final recursive results
+            results_df= pd.DataFrame(recursive_preds)
+            results_df.set_index('Date', inplace=True)
+            save_name=f"Results/recursive_{config['experiment_name']}_{target_name}_{h}m.csv"
+            results_df.to_csv(save_name)
+
+
+
+#run the model 
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True)
+    args = parser.parse_args()
+    
+    with open(args.config, 'r') as f:
+        conf = yaml.safe_load(f)
         
-
-#load Data
-df= pd.read_csv('../../Data/Cleaned_Data/data_stationary.csv')
-#split to X and Y
-
-X= df.drop(columns=['target']) 
-y= df['target']
-
-
-
-#split data into train and test data (using 20% test data)
-split_idx = int(len(X) * 0.8)
-X_train, X_test = X[:split_idx], X[split_idx:]
-y_train, y_test = y[:split_idx], y[split_idx:]
-
-
-
-#------------------------------------------------
-#Meinshausen Default Model
-#------------------------------------------------
-
-
-# 2. Initialize the QRF model
-# Meinshausen (2006) recommends min_samples_leaf=5 for QRF
-default_qrf= RandomForestQuantileRegressor(
-    n_estimators=1000,       # Meinshausen used 1000 for stability
-    max_features='sqrt',     # Standard for high-dimensional inflation datasets
-    min_samples_leaf=5,      # Meinshausen's suggested default
-    random_state=42,
-    n_jobs=-1                # Use all CPU cores
-)
-
-# 3. Fit the model
-default_qrf.fit(X_train, y_train)
-
-# 4. Expanded Quantiles for Density/Risk Assessment
-# We use a wider range to capture the "tails" of inflation
-quantiles = [0.05, 0.16, 0.50, 0.84, 0.95]
-predictions = default_qrf.predict(X_test, quantile=quantiles)
-
-# 5. Extracting Insights
-df_preds = pd.DataFrame(predictions, columns=[f'q{int(q*100)}' for q in quantiles])
-median_forecast = df_preds['q50']
-inflation_uncertainty = df_preds['q84'] - df_preds['q16'] # Inter-quantile range
-upside_risk = df_preds['q95'] - df_preds['q50']         # Distance to upper tail
-
-
-
-
-#-----------------------------------------------------
-#Optimized Model with Hyperparametertuning
-#-----------------------------------------------------
-
-
-#import metrics
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from Code.Scripts.Utils.metrics import crps_score
-
-
-qrf_to_tune = RandomForestQuantileRegressor(random_state=42)
-
-param_dist = {
-    'n_estimators': [500, 1000, 1500],
-    'max_features': ['sqrt', 'log2', 0.3, 0.5],
-    'min_samples_leaf': [2, 5, 10, 20], # Higher leaf size helps with small n=300
-}
-
-tuning_search = RandomizedSearchCV(
-    estimator=qrf_to_tune,
-    param_distributions=param_dist,
-    scoring=crps_custom_scorer, 
-    cv=tscv,
-    n_iter=20, # Number of parameter combinations to try
-    random_state=42,
-    n_jobs=-1
-)
-
-print("Starting hyperparameter tuning for CRPS...")
-tuning_search.fit(X_train, y_train)
-best_qrf = tuning_search.best_estimator_
-
-# 5. Evaluation & Comparison
-q_grid = np.linspace(0.01, 0.99, 99)
-
-# Predictions for Default
-def_preds = default_qrf.predict(X_test, quantile=q_grid)
-def_crps = crps_score(y_test, def_preds)
-
-# Predictions for Tuned
-tuned_preds = best_qrf.predict(X_test, quantile=q_grid)
-tuned_crps = crps_score(y_test, tuned_preds)
-
-print(f"\n--- Results ---")
-print(f"Default QRF CRPS: {def_crps:.4f}")
-print(f"Tuned QRF CRPS:   {tuned_crps:.4f}")
-print(f"Best Params: {tuning_search.best_params_}")
-
-# 6. Save for Thesis Plots (Fan Chart Data)
-# Save the median and common quantiles for the Fan Chart
-final_quantiles = [0.05, 0.16, 0.50, 0.84, 0.95]
-results_df = pd.DataFrame(
-    best_qrf.predict(X_test, quantile=final_quantiles),
-    columns=['q05', 'q16', 'q50', 'q84', 'q95']
-)
-results_df['actual'] = y_test.values
-results_df.to_csv('../../Results/qrf_forecasts.csv', index=False)
+    run_experiment(conf)
