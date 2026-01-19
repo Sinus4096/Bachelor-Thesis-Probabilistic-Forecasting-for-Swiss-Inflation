@@ -51,10 +51,10 @@ class BVAR:
         for idx in range(N):
             Phi_0[1+idx, idx]=1.0
 
-        #prior precision (inverse covariance) matrix
-        Omega_0_inv= np.zeros((K, K))
+        #prior Variance initialization
+        V_prior= np.zeros((K, K))
         #intercept: loose prior (variance 1000^2-> precision 1e-6
-        Omega_0_inv[0,0]= 1e-6
+        V_prior[0,0]= 1e-6
         #iterate over variables and lags to set prior variances
         for lag in range(1, self.p+1):
             for i in range(N):
@@ -71,8 +71,8 @@ class BVAR:
                         scale_adj= (sigmas[i]/ sigmas[j])   #scale adjustment
                         sigma_sq= ((lam*theta)/decay)**2 *(scale_adj**2)
                     #set precision as inverse of variance
-                    Omega_0_inv[idx, idx]= 1.0/sigma_sq
-        return Phi_0, Omega_0_inv   #return prior mean and prior precision matrix
+                    V_prior[idx, idx]= 1.0/sigma_sq
+        return Phi_0, V_prior   #return prior mean and prior precision matrix
     
     def log_ml_glp(self, loglambda, X, Y, theta,sigmas):
         """compute log marginal likelihood for GLP optimization"""
@@ -153,157 +153,106 @@ class BVAR:
                 nu_post=T+N+2 #posterior degrees of freedom
                 self.Sigma_draws=stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)  #draws of sigma
                 self.Phi_draws= np.zeros((n_draws, self.n_features, N))  #initialize storage for phi draws
+                L_Omega = np.linalg.cholesky(Omega_post)  #Cholesky of posterior precision
 
-
-        #prior hyperparameters
-        lam=self.params.get('lambda', 0.2)  #shrinkage parameter
-        theta= self.params.get('theta', 0.5)    #overall tightness
-        alpha_decay = self.params.get('alpha', 2.0)   #decay parameter
-        #scale parameters from univariate AR residuals
-        sigmas = self.ar_residual_scales(data)
-
-
-
-
-        
-    def log_marginal_likelihood(self, log_lambda, X, Y, XTX, XTY):
-        """compute log marginal likelihood for given lambda"""
-        #derive lambda as exponential of log_lambda to ensure positivity
-        lambda_val= np.exp(log_lambda)
-            #get prior precision matrix
-        n_samples, n_features= X.shape       #number of features
-        A_0= self.minnesota_precision(n_features, lambda_val)   #prior precision matrix
+                #iterate to draw phi coefficients
+                for draw in range(n_draws):
+                    #if run multiple sims, draw separate sigma 
+                    if n_draws>1:
+                        Sigma =self.Sigma_draws[draw]
+                    #if just one sim, only one sigma
+                    else:
+                        Sigma= self.Sigma_draws
+                    L_Sigma= np.linalg.cholesky(Sigma)  #Cholesky of sigma
+                    #standard normal draws to generate correlated normals
+                    Z= np.random.normal(size=(self.n_features, N))
+                    #draw phi
+                    self.Phi_draws[draw]= Phi_post + L_Omega.T @Z @L_Sigma.T
             
-         #compute posterior parameters
-        A_n= XTX +A_0         #posterior precision
+            #independent normal-inverse wishart prior
+            #----------------------------------
+            elif 'niw' in self.prior_type:
+                #prior hyperparameters
+                lam=0.2    #prior std dev of coefficients, fixed for simplicity
+                theta=0.5  #shrinkage on cross lags
+                n_iter =self.params.get('sampling', {}).get('n_draws', 2000)  #number of posterior draws
+                burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
 
-        #compute posterior mean and variance
-        A_n_inv= np.linalg.inv(A_n) #inverse
-        log_det_An= 2*np.sum(np.log(np.diag(A_n_inv)))  #log determinant via Cholesky
-        log_det_A0= np.sum(np.log(np.diag(A_0)))    #log determinant of prior precision
+                #prior moments
+                Phi_0, Omega_0_inv= self.minnesota_moments(N, lam, theta, sigmas)   #get mean and prior precision through fct
+                Phi_prior=Phi_0 #make copy of prior mean
+                V_prior_inv= Omega_0_inv  #copy prior precision
+                #initialize phi and sigma
+                Phi_current= np.zeros((self.n_features, N))
+                Sigma_current= np.eye(N)
+                #initialize storage for draws: vec bzw matrix of zeros
+                self.Phi_draws= np.zeros((n_iter-burn_in, self.n_features, N))
+                self.Sigma_draws= np.zeros((n_iter-burn_in, N, N))
 
-        beta_n= np.linalg.solve(A_n, XTY)    #posterior mean
-        yy= np.dot(Y,Y)     #calculate the sum of squares of Y
-        S_n= yy-np.dot(beta_n.T, np.dot(A_n, beta_n))  #sum of squares residuals
-        #if S_n invalid, return negative infinity
-        if S_n <=0:
-            return -np.inf  
-        return 0.5*(log_det_An- log_det_A0)- (n_samples/2.0)*np.log(S_n)    #return log marginal likelihood, calculated as per standard formula
-        
-    def fit(self, X, Y):
-        """fit the hierarchical Bayesian regression model
-    """
-        #standardize features X
-        self.X_mean= np.mean(X, axis=0)
-        self.X_std= np.std(X, axis=0)
-        self.X_std[self.X_std==0]=1.0     #avoid division by zero
-        X_scaled= (X -self.X_mean)/ self.X_std  #standardized X
+                XX= X.T @X
+                XY=X.T @Y
 
-        #add intercept
-        X_design= np.column_stack([np.ones(X_scaled.shape[0]), X_scaled])  #add column of intercepts with 1s
-        y_vec= Y.values  #convert to numpy array
+                #iterate through draws to sample from posterior
+                for it in range(n_iter):
+                    #update Phi given Sigma
+                    Sigma_inv= np.linalg.inv(Sigma_current)    #inverse of current sigma
+                    V_post=np.linalg.inv(V_prior_inv +XX)  #posterior covariance
+                    Phi_hat= V_post@(V_prior_inv @Phi_prior + XY)   #posterior mean estimate
+                    #draw new Phi
+                    L_V=np.linalg.cholesky(V_post)     #Cholesky of posterior covariance
+                    L_S =np.linalg.cholesky(Sigma_current)   #Cholesky of current sigma
+                    Z=np.random.normal(size=(self.n_features, N))   #standard normal draws
+                    Phi_current= Phi_hat + L_V@Z @L_S.T    #draw new Phi
 
-        #precompute X'X and X'Y
-        n_samples, n_features= X_design.shape #get dimensions
-        XTX= X_design.T@X_design         #X'X
-        XTY= X_design.T @y_vec   #X'Y
+                    #update Sigma given Phi
+                    residuals= Y - X @Phi_current   #compute residuals
+                    S_post =np.dot(residuals.T, residuals) #posterior scale matrix
+                    nu_post= T +N +2   #posterior degrees of freedom
+                    #draw new Sigma from inverse-Wishart
+                    Sigma_current= stats.invwishart.rvs(df=nu_post, scale=S_post)
 
-        #minnesota prior hyperparameter optimization
-        if self.prior_type=='minnesota':
-            final_lambda= self.params.get('lambda', 0.2)    #default lambda
-            if self.shrinkage=='hierarchical':
-                #optimize log marginal likelihood to find best lambda
-                res= optimize.minimize_scalar(lambda log_lam: -self.log_marginal_likelihood(log_lam, X_design, y_vec, XTX, XTY),bounds=(-3.0, 1.0), method='bounded')
-                final_lambda= np.exp(res.x)      #optimal lambda
-
-            #posterior parameters
-            A_0= self.minnesota_precision(n_features, final_lambda)   #prior precision matrix
-            A_n= XTX +A_0   #posterior precision
-            beta_hat= np.linalg.solve(A_n, XTY)  #posterior mean
-            residuals= y_vec - X_design @beta_hat  #residuals estimation
-            sse=np.sum(residuals**2)  #sum of squared errors
-               
-            #sampling from posterior
-            n_draws= self.params.get('sampling_iters', 2000)  #number of posterior draws
-            sig2_draws= stats.invgamma.rvs(a=(n_samples/2.0), scale=(sse/2.0), size=n_draws)  #draws of error variance
-            self.sigma_draws=np.sqrt(sig2_draws)  #store std dev draws
-            self.beta_draws= np.zeros((n_draws, n_features))  #initialize beta draws storage
-            A_n_inv= np.linalg.inv(A_n)  #inverse of posterior precision
-            #iterate to draw beta coefficients
-            for draw in range(n_draws):
-                cov_beta= A_n_inv*sig2_draws[draw]  #covariance of beta
-                self.beta_draws[draw,:]= stats.random.multivariate_normal(mean=beta_hat, cov=cov_beta)  #draw beta coefficients randomly from posterior distribution and store
-               
-        #for independent normal-inverse wishart prior
-        elif self.prior_type=='niw':
-            #prior hyperparameters
-            n_iter= self.params.get('sampling_iters', 2000)  #number of posterior draws
-            burn_in= int(n_iter*0.2)    #burn-in period (=period to discard initial samples for convergence)
-            beta_current=np.zeros(n_features)   #current beta is zero vector
-            sigma_current=1.0  #initialize current error std dev
-            lambda_current=0.2   
-            self.beta_draws= np.zeros((n_iter-burn_in, n_features))     #initialize storage for beta draws
-            self.sigma_draws= np.zeros(n_iter-burn_in)  #initialize storage for sigma draws
-        
-        
-            #iterate
-            for it in range(n_iter):
-                #update beta given sigma2
-                V0_inv=np.eye(n_features)*(1.0/(lambda_current**2))     #prior precision
-                V0_inv[0,0]=1e-6   #no shrinkage on intercept
-                V_post = np.linalg.inv(V0_inv + (XTX/sigma_current**2)) #posterior covariance
-                mu_post= V_post @(XTY/sigma_current**2)   #posterior mean
-                beta_current =np.random.multivariate_normal(mu_post, V_post)  #draw new beta
-
-                #update sigma given beta
-                residuals= y_vec-X_design @beta_current  #compute residuals
-                ssr=np.dot(residuals,residuals)   #sum of squared residuals
-                sigma_current =np.sqrt(stats.invgamma.rvs(a=(n_samples/2.0 +0.001), scale=(ssr/2.0+0.001)))  #draw new sigma by updating from inverse-gamma, add 0.001 to avoid issues
-
-                #update lambda
-                if self.shrinkage=='hierarchical':
-                    #define grid for lambda to sample from
-                    grid_lambda= np.linspace(0.01, 2.0, 50)
-                    b_slopes= beta_current[1:]  #exclude intercept
-                    k= len(b_slopes)      #number of slopes
-                    log_post= []  #initialize store log posterior values
-                    for l_val in grid_lambda:
-                        #compute log posterior for each lambda in grid
-                        ll=-k*np.log(l_val)- (np.sum(b_slopes**2)/(2.0*l_val**2))   #log likelihood part
-                        lp= stats.gamma.logpdf(l_val, a=2.0, scale=0.1)   #log prior part (gamma prior with shape=2, scale=0.5)
-                        #append total log posterior
-                        log_post.append(ll+lp)
-                    #convert to probabilities: subtract max for numerical stability
-                    probs= np.exp(np.array(log_post)- np.max(log_post))  
-                    #notmalize to get sum of 1
-                    probs= probs/ np.sum(probs)
-                    #sample new lambda from grid based on posterior probabilities
-                    lambda_current= np.random.choice(grid_lambda, p=probs)
-
-                #store draws after burn-in
-                if it >= burn_in:
-                    self.beta_draws[it-burn_in,:]= beta_current
-                    self.sigma_draws[it-burn_in]= sigma_current
-        
+                    #store draws after burn-in
+                    if it >= burn_in:
+                        self.Phi_draws[it-burn_in]= Phi_current
+                        self.Sigma_draws[it-burn_in]= Sigma_current
         return self
-        
-    def predict(self, X):
-        """make predictions with fitted model"""
-        X_scaled= (X -self.X_mean)/ self.X_std          #standardize X
-        X_design= np.column_stack([np.ones(X_scaled.shape[0]), X_scaled]) #add intercept column of 1s
+    
+    def forecast(self, data, horizon=12):
+        """iterative system forecasting"""
+        #get historical data as array
+        Y_hist=data.values 
+        #slice last p rows-> get starting lag window
+        current_window=Y_hist[-self.p:,:] 
+        N=self.n_vars       #nr of variables
+        #determine how many B simulations
+        n_draws=self.Phi_draws.shape[0]
+        #initialize 0-array
+        paths =np.zeros((n_draws, horizon, N))
 
+        for idx in range(n_draws):
+            #select coefficient matrix
+            Phi = self.Phi_draws[idx]
+            #if have unique Cov Matrix-> different one for each draw
+            if self.Sigma_draws.ndim==3:
+                Sigma =self.Sigma_draws[idx]
+            else:
+                Sigma=self.Sigma_draws  #same for each draw
 
-        n_preds= X_design.shape[0]      #number of predictions
-        n_draws= self.beta_draws.shape[0]   #number of posterior draws
-        preds= np.zeros((n_preds, n_draws))         #initialize predictions storage
+            #copy to append new predictions iteratively
+            temp_hist=current_window.copy()
+            #iterate through all forecast horizons
+            for h in range(horizon):
+                lags =[]    #initialize list
+                #iterate through nr of lags-> collect observations 
+                for lag in range(1, self.p+1):
+                    lags.append(temp_hist[-lag,:])
+                #regressor vector, intecerpt=1.0
+                x_t =np.concatenate([[1.0], np.concatenate(lags)])
 
-        #iterate over posterior draws to make predictions
-        for draw in range(n_draws):
-            y_hat= X_design @self.beta_draws[draw]   #predicted mean
-            #add noise based on sigma draw
-            noise= np.random.normal(loc=0.0, scale=self.sigma_draws[draw], size=n_preds)
-            #store prediction 
-            preds[:, draw]= y_hat+noise
-            
-        return preds      #return matrix of predictions 
+                #next step prediction
+                pred=x_t@Phi+np.random.multivariate_normal(np.zeros(N), Sigma)
+                paths[idx,h,:] =pred      #store prediction 
+                temp_hist =np.vstack([temp_hist, pred]) #append prediction
 
+        #return collection of simulated paths
+        return paths
