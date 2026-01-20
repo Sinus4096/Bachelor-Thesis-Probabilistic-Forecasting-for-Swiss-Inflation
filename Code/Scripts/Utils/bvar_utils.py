@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import stats, optimize
+import scipy.linalg
 #see thesis for formulas
 class BVAR:
     """
@@ -126,7 +127,8 @@ class BVAR:
         #create lagged matrices calling fct
         X, Y= self.create_lags(data)
         #get dimensions
-        T, N=Y.shape
+        T, N=Y.shape    #nr of equations and obs.
+        K=self.n_features  #nr of features
 
         #calc univariate AR residuals for scaling 
         sigmas=np.zeros(N)  #to store scales
@@ -189,46 +191,57 @@ class BVAR:
                     Z= np.random.normal(size=(self.n_features, N))
                     #draw phi
                     self.Phi_draws[draw]= Phi_post + L_V.T @Z @L_Sigma.T
+
             
             #independent normal-inverse wishart prior
             #----------------------------------
-            elif 'niw' in self.prior_type:
+            elif 'independent_niw' in self.prior_type:
                 #prior hyperparameters
-                lam=0.2    #prior std dev of coefficients, fixed for simplicity
-                theta=0.5  #shrinkage on cross lags
+                lam=0.2    #overall tightness eq 6 (=a1)
+                theta=0.5  #shrinkage on cross lags (=a2 in thsis)
+                #def intercept tightness to 100 by default->loose (is common choice)
+                a3=self.params.get('alpha', 100.0)
                 n_iter =self.params.get('sampling', {}).get('n_draws', 2000)  #number of posterior draws
                 burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
 
                 #prior moments
-                Phi_0, Omega_0_inv= self.minnesota_moments(N, lam, theta, sigmas)   #get mean and prior precision through fct
-                Phi_prior=Phi_0 #make copy of prior mean
-                V_prior_inv= Omega_0_inv  #copy prior precision
-                #initialize phi and sigma
-                Phi_current= np.zeros((self.n_features, N))
-                Sigma_current= np.eye(N)
+                Phi_0, V_alpha_0_inv= self.minnesota_moments(N, lam, theta,a3, sigmas)   #get mean and prior precision through fct
+                alpha_0= Phi_0.flatten(order='F')   #vectorize prior mean
+                #prior scale matrix
+                S_0=np.diag(sigmas**2)
+                #prior degrees of freedom
+                nu_0= N+2
+                #initialize for Gibbs sampling
+                Phi_current= Phi_0.copy()
+                Sigma_current= np.diag(sigmas**2)   #start value for sigma
                 #initialize storage for draws: vec bzw matrix of zeros
                 self.Phi_draws= np.zeros((n_iter-burn_in, self.n_features, N))
                 self.Sigma_draws= np.zeros((n_iter-burn_in, N, N))
-
+                #X'X for precision update
                 XX= X.T @X
-                XY=X.T @Y
 
-                #iterate through draws to sample from posterior
+
+                #iterate through draws to sample from posterior: gibbs sampling
                 for it in range(n_iter):
-                    #update Phi given Sigma
-                    Sigma_inv= np.linalg.inv(Sigma_current)    #inverse of current sigma
-                    V_post=np.linalg.inv(V_prior_inv +XX)  #posterior covariance
-                    Phi_hat= V_post@(V_prior_inv @Phi_prior + XY)   #posterior mean estimate
-                    #draw new Phi
-                    L_V=np.linalg.cholesky(V_post)     #Cholesky of posterior covariance
-                    L_S =np.linalg.cholesky(Sigma_current)   #Cholesky of current sigma
-                    Z=np.random.normal(size=(self.n_features, N))   #standard normal draws
-                    Phi_current= Phi_hat + L_V@Z @L_S.T    #draw new Phi
+                    #take inverse of current sigma
+                    Sigma_inv= np.linalg.inv(Sigma_current)   
+                    #capture independent flexibility (posterior cov)
+                    V_alpha_post_inv=V_alpha_0_inv +np.kron(Sigma_inv,XX)
+                    V_alpha_post=np.linalg.inv(V_alpha_post_inv)   
+                    #calc weighted avf of prior and data
+                    data_term= (X.T@Y@Sigma_inv).flatten(order='F')
+                    alpha_hat= V_alpha_post @ (V_alpha_0_inv @alpha_0+data_term)
+                    #draw alpha from normal
+                    alpha_draw= np.random.multivariate_normal(alpha_hat, V_alpha_post)
+                    #convert vectorized alpha to (KxN)
+                    Phi_current=alpha_draw.reshape((self.n_features, N), order='F')
 
-                    #update Sigma given Phi
-                    residuals= Y - X @Phi_current   #compute residuals
-                    S_post =np.dot(residuals.T, residuals) #posterior scale matrix
-                    nu_post= T +N +2   #posterior degrees of freedom
+                    #compute residuals
+                    residuals= Y -X @Phi_current
+                    #calc posterior scale matrix
+                    S_post= S_0+ residuals.T @residuals
+                    nu_post= nu_0+ T   #posterior degrees of freedom
+                    
                     #draw new Sigma from inverse-Wishart
                     Sigma_current= stats.invwishart.rvs(df=nu_post, scale=S_post)
 
