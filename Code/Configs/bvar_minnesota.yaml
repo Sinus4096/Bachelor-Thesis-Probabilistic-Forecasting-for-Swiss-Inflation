@@ -14,5 +14,5 @@ model:
   #def hierarchical hyperparameters (Giannone et al. 2015 logic)
   params:
     lambda: 0.2    #initial value for overall tightness (will optimize)
-    theta: 0.5  #leave for documentation, is implicitly handled by standardization
-    
+    theta: 0.5  #is implicitly handled by standardization
+    a3: 100 #intercept tightness

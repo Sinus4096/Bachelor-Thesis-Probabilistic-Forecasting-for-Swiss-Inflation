@@ -1,0 +1,23 @@
+#config file to run the default qrf used by the ecb and proposed by Meinshausen but with only 5 min of data points allowed in final leaf to chekc
+#for non-linearity seen in ecb results-> everything same as in default except for min_samples_leaf
+experiment_name: "QRF_Default"
+model_type: "qrf"
+
+#define the data used in the experiment
+data:
+  targets: ["Headline", "Core"]     
+  horizons: [3, 6, 9, 12]      
+
+  evaluation_scheme: "expanding_window"
+  eval_start_date: "2015-01-01"    
+  retrain_step_months: 3     
+
+#specify default model           
+model:
+  tune_hyperparameters: false   
+  params:
+    n_estimators: 500    
+    min_samples_leaf: 5    #change to 5
+    max_features: 0.33    
+    n_jobs: -1  
+    random_state: 42    

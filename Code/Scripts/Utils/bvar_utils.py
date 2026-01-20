@@ -1,6 +1,6 @@
 import numpy as np
 from scipy import stats, optimize
-#see README for formulas
+#see thesis for formulas
 class BVAR:
     """
     implementation of Bayesian VAR with natural conjugate priors
@@ -9,7 +9,7 @@ class BVAR:
         #initialize model
         self.p= lags  #number of lags
         self.prior_type =prior_type      #is minnesota by default
-        self.params= prior_params if prior_params else {'lambda': 0.2, 'theta':0.5, 'alpha':2.0} #default prior params if none provided
+        self.params= prior_params if prior_params else {'lambda': 0.2, 'theta':0.5, 'a3': 100.0, 'alpha':2.0} #default prior params if none provided
         self.phi_draws= None        #to store posterior draws of coefficients
         self.sigma_draws= None  #to store posterior draws of error variances
 
@@ -40,41 +40,51 @@ class BVAR:
 
         return X, Y_cut     #return matrix Xand Y
 
-    def minnesota_moments(self, N, lam, theta, sigmas):
-        """construct prior mean and variance for Minnesota prior, return mean vector and prior precision matrix
-        """
-        #number of features
-        K=self.n_features
+    def minnesota_moments(self, N, a1, a2, a3, sigmas):
+        """construct prior mean and variance for Minnesota prior (according to thesis notation)"""
+        #number of features per equation
+        K= 1+ N*self.p
+        #total nr params in alpha
+        M=N*K
         #prior mean vector: zeros except for first lag of own variable
         Phi_0 = np.zeros((K, N))
-        #iterate to set first lag own variable coefficients to 1
+        #iterate to set first lag
         for idx in range(N):
-            Phi_0[1+idx, idx]=1.0
-
+            Phi_0[1+idx, idx]=1.0   #acc to thesis: own lags are 1 all remaining 0
+        
+        #vectorize to get alpha_bar
+        alpha_0= Phi_0.T.flatten()  
         #prior Variance initialization
-        V_prior= np.zeros((K, K))
-        #intercept: loose prior (variance 1000^2-> precision 1e-6
-        V_prior[0,0]= 1e-6
-        #iterate over variables and lags to set prior variances
-        for lag in range(1, self.p+1):
-            for i in range(N):
+        V_prior= np.zeros(M)
+        
+        #loop through  equations
+        for i in range(N):
+            #get idx
+            idx_int= i*K
+            #intercept = a3*sigma_i^2
+            V_prior[idx_int]= a3* (sigmas[i]**2)
+
+            #loop through lags
+            for lag in range(1, self.p+1):
+                #loop through variables
                 for j in range(N):
-                    #compute index in Phi
-                    idx = 1+(lag-1)*N+ j
-                    #lag decay (= 1/lag^2) (only calc lag^2 yet)
-                    decay= (lag**2)
+                    #calc index for coeff of var j at lag k in eq i
+                    idx= (i*K)+1+((lag-1)*N)+j
+                    #lag decay
+                    decay= lag**2
                     #own lag variance
                     if i==j:
-                        sigma_sq= (lam/decay)**2
+                        V_prior[idx]= a1/decay
                     #cross lag variance
                     else:
-                        scale_adj= (sigmas[i]/ sigmas[j])   #scale adjustment
-                        sigma_sq= ((lam*theta)/decay)**2 *(scale_adj**2)
-                    #set precision as inverse of variance
-                    V_prior[idx, idx]= 1.0/sigma_sq
-        return Phi_0, V_prior   #return prior mean and prior precision matrix
+                        sigma_ii=sigmas[i]**2
+                        sigma_jj=sigmas[j]**2
+                        V_prior[idx]= (a2*sigma_ii)/(decay*sigma_jj)
+        #set precision as diagonal matrix
+        V_prior_cov= np.diag(V_prior)
+        return Phi_0, V_prior_cov   #return prior mean and prior precision matrix
     
-    def log_ml_glp(self, loglambda, X, Y, theta,sigmas):
+    def log_ml_glp(self, loglambda, X, Y, theta, a3, sigmas):
         """compute log marginal likelihood for GLP optimization"""
         #define parameters
         lambda_val= np.exp(loglambda)  
@@ -82,14 +92,18 @@ class BVAR:
         K= X.shape[1]  #number of features
 
         #get prior moments
-        Phi_0, Omega_0_inv= self.minnesota_moments(N, lambda_val, theta, sigmas)
+        Phi_0_full, V_prior= self.minnesota_moments(N, lambda_val, theta, a3, sigmas)
+        #V_prior= MxM matrix for computation need KxK matrix
+        Omega_0_inv= np.linalg.inv(V_prior[:K, :K])
+        #also Phi_0 as KxN matrix
+        Phi_0=Phi_0_full.reshape((K, N), order='F')
         #compute posterior parameters
         XX= X.T @X
         Omega_post_inv= Omega_0_inv + XX   #posterior precision
         #compute Cholesky decompositions for numerical stability
         L_prior=np.linalg.cholesky(Omega_0_inv+ np.eye(K)*1e-10)  #add small value for numerical stability
         L_post =np.linalg.cholesky(Omega_post_inv)
-        #log determinants
+        #log determinants of precision matrixa
         log_det_prior= 2.0*np.sum(np.log(np.diag(L_prior)))
         log_det_post= 2.0*np.sum(np.log(np.diag(L_post)))
         #compute post covariance and mean
@@ -103,7 +117,7 @@ class BVAR:
         term2= Phi_post.T @ Omega_post_inv@ Phi_post  #posterior quadratic term
         S_post=S_0+ YTY +term1- term2   #posterior scale matrix
         #compute log marginal likelihood
-        log_ml= 0.5*(log_det_prior- log_det_post)-(T/2.0)*np.linalg.slogdet(S_post)[1]
+        log_ml =0.5 *(log_det_prior-log_det_post)-(T /2.0)*np.linalg.slogdet(S_post)[1]
         return log_ml   
 
     def fit(self, data):
@@ -112,48 +126,55 @@ class BVAR:
         #create lagged matrices calling fct
         X, Y= self.create_lags(data)
         #get dimensions
-        T, N=X.shape
+        T, N=Y.shape
 
         #calc univariate AR residuals for scaling 
         sigmas=np.zeros(N)  #to store scales
         for idx in range(N):
-            #get dependent and independent variables for univariate AR
-            y_i= Y[:, idx]
-            x_i= X[:,1:2] #only own first lag
+            #get dependent variables for univariate AR
+            y_i =Y[:, idx]
+            #use own p lags-> calc residuals
+            res=np.linalg.lstsq(X[:, 1:], y_i, rcond=None)[0]
+            residuals= y_i - X[:, 1:] @res
+            sigmas[idx]= np.sqrt(np.sum(residuals**2)/ (T-self.p-1))  #store std dev of residuals
 
             #Minnesota config
             #-----------------
             if 'minnesota' in self.prior_type:
-                #def prior theta(overall tightness)
-                theta= self.params.get('theta',0.5)
+                #def prior theta(overall tightness) 
+                a2= self.params.get('theta',0.5)
+                #def intercept tightness to 100 by default->loose (is common choice)
+                a3=self.params.get('alpha', 100.0)
 
                 #check if hierarchical (estimate lambda) or fixed
                 if isinstance(self.params.get('lambda'), dict):
                     #glp optimization
-                    res=optimize.minimize_scalar(lambda loglam: -self.log_ml_glp(loglam, X, Y, theta, sigmas), bounds=(-3.0, 0.5), method='bounded')
+                    res=optimize.minimize_scalar(lambda loglam: -self.log_ml_glp(loglam, X, Y, a2, a3, sigmas), bounds=(-3.0, 0.5), method='bounded')
                     #optimal lambda
                     final_lambda=np.exp(res.x)
                 #else fixed lambda
                 else:
                     final_lambda= self.params.get('lambda', 0.2)
                 #get prior moments with fct
-                Phi_0, Omega_0_inv= self.minnesota_moments(N, final_lambda, theta, sigmas)
+                Phi_0, V_prior= self.minnesota_moments(N, final_lambda, a2, a3, sigmas)
                 
+                #conver cov to precision 
+                V_prior_inv=np.linalg.inv(V_prior)
                 #calculate posterior parameters
                 XX= X.T @X  
-                Omega_post_inv= Omega_0_inv + XX   #posterior precision
-                Omega_post= np.linalg.inv(Omega_post_inv)  #posterior covariance
-                Phi_post =Omega_post@(X.T @Y+ Omega_0_inv @Phi_0)   #posterior mean
-                #calculate residuals
+                V_post_inv= V_prior_inv + XX   #posterior precision
+                V_post= np.linalg.inv(V_post_inv)  #posterior covariance
+                Phi_post =V_post@(X.T @Y+ V_prior_inv @Phi_0)   #posterior mean
+                #calculate scale matrix
                 S_0=np.diag(sigmas**2)   #prior scale matrix
-                S_post=S_0+Y.T @Y +Phi_0.T @ Omega_0_inv @Phi_0 - Phi_post.T@ Omega_post_inv @Phi_post  #posterior scale matrix
+                S_post=S_0+Y.T @Y +Phi_0.T @ V_prior_inv@Phi_0 - Phi_post.T@ V_post_inv @Phi_post  #posterior scale matrix
                 
                 #draws from posterior
                 n_draws=2000
                 nu_post=T+N+2 #posterior degrees of freedom
                 self.Sigma_draws=stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)  #draws of sigma
                 self.Phi_draws= np.zeros((n_draws, self.n_features, N))  #initialize storage for phi draws
-                L_Omega = np.linalg.cholesky(Omega_post)  #Cholesky of posterior precision
+                L_V = np.linalg.cholesky(V_post)  #Cholesky of posterior precision
 
                 #iterate to draw phi coefficients
                 for draw in range(n_draws):
@@ -167,7 +188,7 @@ class BVAR:
                     #standard normal draws to generate correlated normals
                     Z= np.random.normal(size=(self.n_features, N))
                     #draw phi
-                    self.Phi_draws[draw]= Phi_post + L_Omega.T @Z @L_Sigma.T
+                    self.Phi_draws[draw]= Phi_post + L_V.T @Z @L_Sigma.T
             
             #independent normal-inverse wishart prior
             #----------------------------------
