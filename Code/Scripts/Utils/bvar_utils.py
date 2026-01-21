@@ -249,6 +249,47 @@ class BVAR:
                     if it >= burn_in:
                         self.Phi_draws[it-burn_in]= Phi_current
                         self.Sigma_draws[it-burn_in]= Sigma_current
+            
+
+            # Natural Conjugate Normal-Wishart Prior
+            # -------------------------------------
+            elif 'natural_niw' in self.prior_type:
+                #hyperparameters as before
+                a1 =self.params.get('lambda', 0.2)
+                a2= self.params.get('theta', 0.5)
+                a3= self.params.get('alpha', 100.0)
+                n_draws=self.params.get('sampling', {}).get('n_draws', 2000)
+
+                #priors; Psi is relative tightness matrix
+                Phi_0, Psi_prior=self.minnesota_moments(N, a1, a2, a3, sigmas)
+                Psi_prior_inv=np.linalg.inv(Psi_prior)                
+                #prior scale matrix
+                S_0 =np.diag(sigmas**2)
+                nu_0=N+ 2    #prior degrees of freedom
+                #posteriors (derived analytically)
+                XX=X.T @X
+                Psi_post_inv=Psi_prior_inv +XX  #posterior precision
+                Psi_post =np.linalg.inv(Psi_post_inv)
+                
+                #post mean for phi
+                Phi_post =Psi_post @(X.T@ Y +Psi_prior_inv@Phi_0)                
+                #posterior scale matrix
+                S_post=S_0+Y.T @Y +Phi_0.T@ Psi_prior_inv @Phi_0-Phi_post.T@ Psi_post_inv@Phi_post
+                nu_post = nu_0 + T
+
+                #direct sampling: draw from Inverse-Wishart
+                self.Sigma_draws =stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)
+                #initialize storage for phi draws
+                self.Phi_draws=np.zeros((n_draws, self.n_features, N))
+                L_Psi =np.linalg.cholesky(Psi_post)
+                #iterate to draw phi coefficients
+                for draw in range(n_draws):
+                    Sigma=self.Sigma_draws[draw] #draw sigma   
+                    L_Sigma =np.linalg.cholesky(Sigma)  
+                    
+                    #matrix-normal property
+                    Z=np.random.normal(size=(self.n_features, N))
+                    self.Phi_draws[draw]= Phi_post+ L_Psi @Z@L_Sigma.T
         return self
     
     def forecast(self, data, horizon=12):

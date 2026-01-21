@@ -92,14 +92,37 @@ print(df_stationary.tail())
 
 
 
+
+
+
+#----------------------------------
+#YoY %-growth rates for comparison
+#----------------------------------
+#create reference for actual realized YoY inflation-> will compare predictions against this
+df_yoy = pd.DataFrame(index=df.index)
+df_yoy['Headline']=np.log(df['Headline_CPI']).diff(12)*100 
+df_yoy['Core'] =np.log(df['Core_CPI']).diff(12)*100
+
+#add levels for Conditional forecast later
+df_yoy['Headline_level']= df['Headline_CPI']
+df_yoy['Core_level']= df['Core_CPI']
+
+#same starting date as df_stationary
+start_date ='2001-05-01'
+df_yoy=df_yoy.loc[start_date:] 
+
+#check for NA's
+nans_per_column_yoy =df_yoy.isna().sum()
+print(nans_per_column_yoy)
+
 #--------------------------------------
-#save the DF
+#save the DF's
 #----------------------------------------
 #define path to csv directory
 CODE_DIR=Path(__file__).parent.parent
 output_path=CODE_DIR /"Data"/"Cleaned_Data"
 #print the processed df to outputpath
-output_file=output_path/'data_stationary.csv'
-df_stationary.to_csv(output_file, index=True)
-
-
+output_file1=output_path/'data_stationary.csv'
+df_stationary.to_csv(output_file1, index=True)
+output_file2=output_path/'data_yoy.csv'
+df_yoy.to_csv(output_file2, index=True)

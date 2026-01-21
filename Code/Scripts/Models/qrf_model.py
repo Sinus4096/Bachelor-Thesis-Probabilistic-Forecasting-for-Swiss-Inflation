@@ -25,9 +25,10 @@ def load_config(config_path):
 def run_experiment(config):
     #want to know which one (default or tuning)
     print(f"run {config['experiment_name']}")
-    #load df_stationary
+    #load data_stationary and data_yoy
     path='Code/Data/Cleaned_Data/data_stationary.csv'
     df=pd.read_csv(path, index_col='Date', parse_dates=True)
+    df_yoy=pd.read_csv('Code/Data/Cleaned_Data/data_yoy.csv', index_col='Date', parse_dates=True)
 
     #get target variables and forecast horizon from the config file
     targets=config['data']['targets']
@@ -43,8 +44,12 @@ def run_experiment(config):
             #setup data for this specific horizon of specific target (eg 3mont CPI forecast)
             if target_name =="Headline":
                 target_col= f"target_headline_{h}m" #set target_col as defined in script 03
+                yoy_col="Headline"  #evaluate headline data
+                yoy_raw="Headline_level"  #for conditional forecasts
             else:
                 target_col=f"target_core_{h}m"
+                yoy_col="Core"  #evaluate core data
+                yoy_raw="Core_level"  #for conditional forecasts
             #make sure df_stationary contains the forecast horizon
             if target_col not in df.columns:
                 continue
@@ -84,6 +89,7 @@ def run_experiment(config):
             else:
                 final_params= config['model']['params']
             
+            #recursive out-of-sample predictions
             recursive_preds = []    #initialize storage for out-of-sample predictions
             #start time loop at eval_start_date-> get index location of eval_start_date 
             start_idx = df.index.get_loc(eval_start_date)
@@ -112,7 +118,7 @@ def run_experiment(config):
                 X_train= X_slice.iloc[train_indices]
                 Y_train = Y_slice.iloc[train_indices]
                 X_test = X_slice.iloc[test_indices]
-                Y_test =Y_slice.iloc[test_indices]
+                #don't use df for testing /evaluating but the  yoy changes
                 #only drop NAN's for the training set: test might have NAN's in the end-> inference
                 Y_train= Y_train.dropna()
                 X_train= X_train.loc[Y_train.index]
@@ -124,7 +130,6 @@ def run_experiment(config):
                 #train model
                 model= RandomForestQuantileRegressor(**model_args)
                 model.fit(X_train, Y_train)
-
                 #predict key quantiles for evaluation and plotting
                 plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
                 preds_plot= model.predict(X_test, quantile=plot_quantiles)    #pre safe the predictions
@@ -134,13 +139,40 @@ def run_experiment(config):
                 preds_dense = model.predict(X_test, quantile=eval_quantiles)
                 #store the resultes nicer in predefined list
                 for idx, date_idx in enumerate(test_indices):
-                     #check if have target for evaluation
-                     actual_val= Y_test.iloc[idx]
-                     #calc step-specific CRPS 
-                     step_crps=calculate_crps([actual_val], preds_dense[idx:idx+1], eval_quantiles)
+                     #get date/origin of forecast
+                     forecast_date= df.index[date_idx]
+                     #calc evaluation target date: add h months to current date
+                     target_date=forecast_date+pd.DateOffset(months=h)
+                     #get actual value from df_yoy
+                     actual_val= df_yoy.loc[target_date, yoy_col] 
+
+                     #reconstruct the forecasted YoY
+                     if h==12:
+                        #for 12m ahead, the qrf target is already yoy
+                        preds_dense_yoy= preds_dense[idx:idx+1]
+                        preds_plot_yoy= preds_plot[idx:idx+1]
+                     else: #if h<12, combine known histaory and model preds
+                        months_back=12 - h  #need the change from t-(12-h) to t
+                        history_date= forecast_date -pd.DateOffset(months=months_back)
+                        #get law log prices
+                        p_t=np.log(df_yoy.loc[forecast_date, yoy_raw])
+                        p_hist=np.log(df_yoy.loc[history_date, yoy_raw])
+                        #calc growth that already happened
+                        base_effect= p_t-p_hist
+                        #deannualize the model preds
+                        scaling_factor= h/12
+                        pred_dense_h_step= preds_dense[idx:idx+1] *scaling_factor
+                        pred_plot_h_step= preds_plot[idx:idx+1] *scaling_factor 
+                        #combine
+                        preds_dense_yoy=base_effect + pred_dense_h_step
+                        preds_plot_yoy= base_effect + pred_plot_h_step
+
+                     
+                     #calc step-specific CRPS: compare model preds(annualized h-month) vs actual yoy
+                     step_crps=calculate_crps([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
-                     result={'Date':df.index[date_idx], 'Actual': actual_val, 'Forecast_median': preds_plot[idx,2],'q05': preds_plot[idx,0],
-                             'q16':preds_plot[idx,1], 'q84': preds_plot[idx, 3],'q95': preds_plot[idx, 4], 'Steps_CRPS': step_crps}
+                     result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[idx,2],'q05': preds_plot_yoy[idx,0],
+                             'q16':preds_plot_yoy[idx,1], 'q84': preds_plot_yoy[idx, 3],'q95': preds_plot_yoy[idx, 4], 'Steps_CRPS': step_crps}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter

@@ -417,14 +417,18 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
 #first drop the two cpi cols bc want to replace them with their yoy changes 
 df_growth=df_growth.drop(['Core_CPI', 'Headline_CPI'], axis=1)
 #calculate yoy changes
-df_growth[['Core_CPI', 'Headline_CPI']]= np.log(df[['Core_CPI', 'Headline_CPI']]).diff(12)*100 
+horizons=[3, 6, 9, 12]
+for h in horizons:
+    df_growth[f'target_headline_{h}m'] =(12/h)*(np.log(df['Headline_CPI']).diff(h))* 100
+    df_growth[f'target_core_{h}m']=(12/h) *(np.log(df['Core_CPI']).diff(h))*100
+
 #check whether cols exist now:
 df_growth.columns
 #redo acf check for the two cols to check whether looks stationary now:
 #define fig
-fig, axes=plt.subplots(nrows=len(targets), ncols=2, figsize=(16, 10))
+fig, axes=plt.subplots(nrows=len(df_growth.columns), ncols=2, figsize=(16, 10))
 #loop through the target variables
-for i, var_name in enumerate(targets):
+for i, var_name in enumerate(df_growth.columns):
         #get data and drop NA's
         series=df_growth[var_name].dropna()
         #acf plot
