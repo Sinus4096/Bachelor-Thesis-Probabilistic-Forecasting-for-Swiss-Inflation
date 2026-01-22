@@ -158,7 +158,7 @@ def run_experiment(config):
                         p_t=np.log(df_yoy.loc[forecast_date, yoy_raw])
                         p_hist=np.log(df_yoy.loc[history_date, yoy_raw])
                         #calc growth that already happened
-                        base_effect= p_t-p_hist
+                        base_effect= (p_t-p_hist)*100
                         #deannualize the model preds
                         scaling_factor= h/12
                         pred_dense_h_step= preds_dense[idx:idx+1] *scaling_factor
@@ -171,8 +171,8 @@ def run_experiment(config):
                      #calc step-specific CRPS: compare model preds(annualized h-month) vs actual yoy
                      step_crps=calculate_crps([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
-                     result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[idx,2],'q05': preds_plot_yoy[idx,0],
-                             'q16':preds_plot_yoy[idx,1], 'q84': preds_plot_yoy[idx, 3],'q95': preds_plot_yoy[idx, 4], 'Steps_CRPS': step_crps}
+                     result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
+                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Steps_CRPS': step_crps}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter

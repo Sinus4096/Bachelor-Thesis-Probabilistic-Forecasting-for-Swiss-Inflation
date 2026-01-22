@@ -51,7 +51,7 @@ class BVAR:
         Phi_0 = np.zeros((K, N))
         #iterate to set first lag
         for idx in range(N):
-            Phi_0[1+idx, idx]=1.0   #acc to thesis: own lags are 1 all remaining 0
+            Phi_0[1+idx, idx]=0.0   #acc to thesis: White noise assumption
         
         #vectorize to get alpha_bar
         alpha_0= Phi_0.T.flatten()  
@@ -95,7 +95,7 @@ class BVAR:
         #prior means (as before)
         Phi_0=np.zeros((K, N))
         for idx in range(N):
-            Phi_0[1+idx, idx]=1.0   #own first lag=1 (RW assumption)
+            Phi_0[1+idx, idx]=0.0   #white noise assumption
         #prior variance 
         Psi_diag=np.zeros(K)
         #intercept variance
