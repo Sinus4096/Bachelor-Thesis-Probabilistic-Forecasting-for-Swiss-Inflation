@@ -22,6 +22,8 @@ def run_experiment(config):
     #load df_stationary
     path='Code/Data/Cleaned_Data/data_stationary.csv'
     df=pd.read_csv(path, index_col='Date', parse_dates=True)
+    df_yoy= pd.read_csv('Code/Data/Cleaned_Data/data_yoy.csv', index_col='Date', parse_dates=True)#load yoy for evaluation
+
 
     #get target variables and forecast horizon from the config file
     target_names =config['data']['targets']
@@ -29,7 +31,7 @@ def run_experiment(config):
     #identify predictors
     predictor_cols= [col for col in df.columns if col not in target_names]
     #create system with targets first then predictors
-    df_system= df[target_names + predictor_cols].copy()
+    df_system= df[target_names+predictor_cols].copy()
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     start_idx= df_system.index.get_loc(eval_start_date) #get index of start date
@@ -60,30 +62,50 @@ def run_experiment(config):
         #get actual observations->errors
         actual_window= df_system.iloc[current_idx: current_idx+max_h]
         #iterate through all horizons to store results
-        for h in horizons:
+        for h in horizons: 
             #skip if horizon longer than available data
             if h> len(actual_window):
                 continue
             #convert horizon to index
             step_idx= h-1
             #get date
-            date=target= actual_window.index[step_idx]
+            date=actual_window.index[step_idx]
 
             #iterate through all target variables& extract results
             for var_name in target_names:
-                #find index of variable (have many-> better by name than enumerate)
-                v_idx= df_system.columns.get_loc(var_name)
-                #get actual value
-                actual_y= actual_window.iloc[step_idx, v_idx]
+                v_idx= df_system.columns.get_loc(var_name)  #get variable index
+                #get col name for raw res
+                yoy_raw_col= f"{var_name}_level"
+                #get actual Yoy value 
+                forecast_date= df_train.index[-1]   #date now- from which we will forecast
+                target_date= forecast_date+ pd.DateOffset(months=h)  #date we want to forecast
+                actual_y= df_yoy.loc[target_date, var_name]
                 #get forecast draws
                 preds_draws= forecast_path[:, step_idx, v_idx]
 
+                #direct forecast evaluation: if h==12 can evaluate directly
+                if h==12:
+                    preds_draws_yoy=preds_draws
+                else:
+                    #for h<12: combine history with deannualized model predictions
+                    months_back=12 - h#need the change from t-(12-h) to t
+                    history_date= forecast_date-pd.DateOffset(months=months_back)   #date of t-12-h
+                    #calc log price levels
+                    p_t= np.log(df_yoy.loc[forecast_date, yoy_raw_col])
+                    p_hist= np.log(df_yoy.loc[history_date, yoy_raw_col])   
+                    #deannualize model preds
+                    base_effect= p_t-p_hist
+                    scaling_factor= 12 /h
+                    preds_draws_yoy= base_effect+preds_draws*scaling_factor
+
+                
+
                 #calc metrics
-                median= np.median(preds_draws)
-                q05, q16, q84, q95= np.percentile(preds_draws, [5,16,84,95])
+                median= np.median(preds_draws_yoy)
+                q05, q16, q84, q95= np.percentile(preds_draws_yoy, [5,16,84,95])
                 #calc CRPS
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
-                preds_dense= np.percentile(preds_draws, eval_quantiles*100)   #get dense quantiles
+                preds_dense= np.percentile(preds_draws_yoy, eval_quantiles*100)   #get dense quantiles
                 crps =calculate_crps([actual_y], [preds_dense], eval_quantiles)  #calc CRPS
                 #average if multiple values returned
                 if hasattr(crps, '__iter__'):

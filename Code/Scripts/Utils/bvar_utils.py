@@ -1,6 +1,5 @@
 import numpy as np
 from scipy import stats, optimize
-import scipy.linalg
 #see thesis for formulas
 class BVAR:
     """
@@ -40,6 +39,7 @@ class BVAR:
         Y_cut= Y[self.p:,:] 
 
         return X, Y_cut     #return matrix Xand Y
+    
 
     def minnesota_moments(self, N, a1, a2, a3, sigmas):
         """construct prior mean and variance for Minnesota prior (according to thesis notation)"""
@@ -65,7 +65,7 @@ class BVAR:
             #intercept = a3*sigma_i^2
             V_prior[idx_int]= a3* (sigmas[i]**2)
 
-            #loop through lags
+            #loop through lags for lag variances
             for lag in range(1, self.p+1):
                 #loop through variables
                 for j in range(N):
@@ -84,6 +84,35 @@ class BVAR:
         #set precision as diagonal matrix
         V_prior_cov= np.diag(V_prior)
         return Phi_0, V_prior_cov   #return prior mean and prior precision matrix
+    
+
+
+    def natural_moments(self, N, lam, a3, sigmas):
+        """construct moments for natural niw (with minnesota function would have dim problems)
+        """
+        #nr of features per equation
+        K= 1+ N*self.p
+        #prior means (as before)
+        Phi_0=np.zeros((K, N))
+        for idx in range(N):
+            Phi_0[1+idx, idx]=1.0   #own first lag=1 (RW assumption)
+        #prior variance 
+        Psi_diag=np.zeros(K)
+        #intercept variance
+        Psi_diag[0]=a3
+        #loop through lags for lag variances
+        for lag in range(1, self.p+1):
+            #adapt variance logic for Kronecker structure
+            scaling= (lam**2)/(lag**2)
+            for j in range(N):
+                #idx in the K-vector
+                idx=1+((lag-1)*N)+j
+
+                #scaling with sigmmas
+                Psi_diag[idx]= scaling
+        #convert to matrix
+        Psi_0= np.diag(Psi_diag)
+        return Phi_0, Psi_0
     
     def log_ml_glp(self, loglambda, X, Y, theta, a3, sigmas):
         """compute log marginal likelihood for GLP optimization"""
@@ -130,14 +159,14 @@ class BVAR:
         T, N=Y.shape    #nr of equations and obs.
         K=self.n_features  #nr of features
 
-        #calc univariate AR residuals for scaling 
+        #calc univariate AR residuals 
         sigmas=np.zeros(N)  #to store scales
         for idx in range(N):
             #get dependent variables for univariate AR
             y_i =Y[:, idx]
             #use own p lags-> calc residuals
             res=np.linalg.lstsq(X[:, 1:], y_i, rcond=None)[0]
-            residuals= y_i - X[:, 1:] @res
+            residuals= y_i-X[:, 1:] @res
             sigmas[idx]= np.sqrt(np.sum(residuals**2)/ (T-self.p-1))  #store std dev of residuals
 
             #Minnesota config
@@ -256,40 +285,45 @@ class BVAR:
             elif 'natural_niw' in self.prior_type:
                 #hyperparameters as before
                 a1 =self.params.get('lambda', 0.2)
-                a2= self.params.get('theta', 0.5)
                 a3= self.params.get('alpha', 100.0)
                 n_draws=self.params.get('sampling', {}).get('n_draws', 2000)
 
                 #priors; Psi is relative tightness matrix
-                Phi_0, Psi_prior=self.minnesota_moments(N, a1, a2, a3, sigmas)
-                Psi_prior_inv=np.linalg.inv(Psi_prior)                
+                Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas)
+                Psi_0_inv=np.diag(1.0/np.diag(Psi_0))              
                 #prior scale matrix
                 S_0 =np.diag(sigmas**2)
                 nu_0=N+ 2    #prior degrees of freedom
                 #posteriors (derived analytically)
                 XX=X.T @X
-                Psi_post_inv=Psi_prior_inv +XX  #posterior precision
+                Psi_post_inv=Psi_0_inv +XX  #posterior precision
                 Psi_post =np.linalg.inv(Psi_post_inv)
                 
-                #post mean for phi
-                Phi_post =Psi_post @(X.T@ Y +Psi_prior_inv@Phi_0)                
-                #posterior scale matrix
-                S_post=S_0+Y.T @Y +Phi_0.T@ Psi_prior_inv @Phi_0-Phi_post.T@ Psi_post_inv@Phi_post
-                nu_post = nu_0 + T
+                #post mean 
+                Phi_post =Psi_post @(Psi_0_inv @Phi_0 +X.T @Y)                
+                #efficient comp of scale matrix
+                term_prior= Phi_0.T @ Psi_0_inv @Phi_0
+                term_post= Phi_post.T@ Psi_post_inv @Phi_post
+                term_data= Y.T @Y
+                #calc posterior scale matrix
+                S_post= S_0 +term_data +term_prior -term_post
+                nu_post = nu_0+T
 
                 #direct sampling: draw from Inverse-Wishart
                 self.Sigma_draws =stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)
                 #initialize storage for phi draws
-                self.Phi_draws=np.zeros((n_draws, self.n_features, N))
+                self.Phi_draws=np.zeros((n_draws, K, N))
+                #cholesky decomp of coefficient covariance matrix
                 L_Psi =np.linalg.cholesky(Psi_post)
                 #iterate to draw phi coefficients
                 for draw in range(n_draws):
                     Sigma=self.Sigma_draws[draw] #draw sigma   
+                    #cholesky of sigma
                     L_Sigma =np.linalg.cholesky(Sigma)  
                     
-                    #matrix-normal property
-                    Z=np.random.normal(size=(self.n_features, N))
-                    self.Phi_draws[draw]= Phi_post+ L_Psi @Z@L_Sigma.T
+                    #matrix-normal draw
+                    Z=np.random.normal(size=(K, N))
+                    self.Phi_draws[draw]= Phi_post+L_Psi @Z@L_Sigma.T
         return self
     
     def forecast(self, data, horizon=12):

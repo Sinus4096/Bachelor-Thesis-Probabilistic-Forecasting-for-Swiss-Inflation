@@ -1,0 +1,18 @@
+#config file for BVAR model with natural NIW prior
+experiment_name: "bvar_natural_niw_hierarchical"
+model_type: "BVAR"
+
+#define data according to teh other bvars
+data:
+  targets: ["Headline", "Core"] 
+  horizons: [3, 6, 9, 12] 
+  eval_start_date: "2015-01-01" 
+  retrain_step_months: 3 
+
+#define the model
+model:
+  prior_type: "natural_niw" 
+  params:
+    n_draws: 2000 #sampling param: direct ->no burn in      
+    lambda: 0.2    #cross-variable tightness (a2)
+    alpha: 100.0  #intercept tightness (a3)
