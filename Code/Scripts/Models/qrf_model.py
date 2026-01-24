@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+import sys
 import pandas as pd
 from pyparsing import Path
 import numpy as np
@@ -6,6 +8,8 @@ from quantile_forest import RandomForestQuantileRegressor
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
+#look for utils 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from Utils.metrics import qrf_crps_scorer, calculate_crps
 from pathlib import Path
 
@@ -181,18 +185,16 @@ def run_experiment(config):
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/Data_experiments/recursive_{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments/{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 
 
 #run the model 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+if __name__=="__main__":
+    parser= argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
-    args = parser.parse_args()
-    
+    args= parser.parse_args()    
     with open(args.config, 'r') as f:
-        conf=yaml.safe_load(f)
-        
+        conf=yaml.safe_load(f)        
     run_experiment(conf)

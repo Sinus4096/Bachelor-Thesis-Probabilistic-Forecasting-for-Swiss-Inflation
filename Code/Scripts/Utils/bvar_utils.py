@@ -18,7 +18,7 @@ class BVAR:
         
 
 
-    def create_lags(self, data):
+    def create_lags(self, data, horizon=1):
         """create lagged data matrices X (Tx(Np+1)) and Y matrix (TxN) for VAR"""
         #define Y
         Y = data.values
@@ -26,8 +26,9 @@ class BVAR:
         self.n_vars= N  #store number of variables
         #create lag matrix
         X_list= []  #to store lagged values
+        #create lags based on t, t-1,... 
         for lag in range(1, self.p+1):
-            X_list.append(Y[self.p-lag:-lag,:])  #append lagged values: from T-p-lag to T-lag
+            X_list.append(Y[self.p -lag:-lag, :])  #append lagged values: from T-p-lag to T-lag
         
         #concatenate lagged values
         X_lags= np.column_stack(X_list)  
@@ -35,10 +36,15 @@ class BVAR:
         X =np.column_stack([np.ones(X_lags.shape[0]), X_lags])
         #store number of features 
         self.n_features= X.shape[1]  
-        #cut Y to align with lags
-        Y_cut= Y[self.p:,:] 
+        #cut Y so that if horizon is 1, we predict Y_{t+1} using X_t
+        Y_cut= Y[self.p +horizon- 1: , :]
+        #X and Y same length-> slice X to end where Y ends
+        if horizon >1:
+            X_cut= X[:-(horizon -1), :]
+        else:
+            X_cut= X
 
-        return X, Y_cut     #return matrix Xand Y
+        return X_cut, Y_cut     #return matrix Xand Y
     
 
     def minnesota_moments(self, N, a1, a2, a3, sigmas):
@@ -150,11 +156,11 @@ class BVAR:
         log_ml =0.5 *(log_det_prior-log_det_post)-(T /2.0)*np.linalg.slogdet(S_post)[1]
         return log_ml   
 
-    def fit(self, data):
+    def fit(self, data, horizon=1):
         """estimate bvar
         """
         #create lagged matrices calling fct
-        X, Y= self.create_lags(data)
+        X, Y= self.create_lags(data, horizon=horizon)
         #get dimensions
         T, N=Y.shape    #nr of equations and obs.
         K=self.n_features  #nr of features
@@ -326,17 +332,21 @@ class BVAR:
                     self.Phi_draws[draw]= Phi_post+L_Psi @Z@L_Sigma.T
         return self
     
-    def forecast(self, data, horizon=12):
+    def forecast(self, data):
         """iterative system forecasting"""
-        #get historical data as array
+        #get most recent lag window from data
         Y_hist=data.values 
-        #slice last p rows-> get starting lag window
-        current_window=Y_hist[-self.p:,:] 
+        #create regressor vector for time T
+        lags=[]
+        for lag in range(1, self.p+1):
+            lags.append(Y_hist[-lag, :])  #append lagged values
+        #flatten and add intercept
+        x_t =np.concatenate([[1.0], np.concatenate(lags)])
         N=self.n_vars       #nr of variables
         #determine how many B simulations
         n_draws=self.Phi_draws.shape[0]
-        #initialize 0-array
-        paths =np.zeros((n_draws, horizon, N))
+        #initialize 0-array for predictions
+        preds =np.zeros((n_draws, N))
 
         for idx in range(n_draws):
             #select coefficient matrix
@@ -346,22 +356,9 @@ class BVAR:
                 Sigma =self.Sigma_draws[idx]
             else:
                 Sigma=self.Sigma_draws  #same for each draw
+            #direct prediction of Y_{T+h}
+            pred=x_t@Phi+np.random.multivariate_normal(np.zeros(N), Sigma)
+            preds[idx,:] =pred      #store prediction 
 
-            #copy to append new predictions iteratively
-            temp_hist=current_window.copy()
-            #iterate through all forecast horizons
-            for h in range(horizon):
-                lags =[]    #initialize list
-                #iterate through nr of lags-> collect observations 
-                for lag in range(1, self.p+1):
-                    lags.append(temp_hist[-lag,:])
-                #regressor vector, intecerpt=1.0
-                x_t =np.concatenate([[1.0], np.concatenate(lags)])
-
-                #next step prediction
-                pred=x_t@Phi+np.random.multivariate_normal(np.zeros(N), Sigma)
-                paths[idx,h,:] =pred      #store prediction 
-                temp_hist =np.vstack([temp_hist, pred]) #append prediction
-
-        #return collection of simulated paths
-        return paths
+        #return predictions
+        return preds

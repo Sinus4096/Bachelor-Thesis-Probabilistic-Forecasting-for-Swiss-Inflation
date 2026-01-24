@@ -456,6 +456,7 @@ start_date ='2000-05-01'
 end_date='2025-04-01'
 df =data_before_split.loc[start_date:end_date]
 df.info()
+df.columns()
 
 #Core_CPI is an object-> coerce to float
 df['Core_CPI']=pd.to_numeric(df['Core_CPI'], errors='coerce') 

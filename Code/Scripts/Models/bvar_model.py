@@ -29,7 +29,7 @@ def run_experiment(config):
     target_names =config['data']['targets']
     horizons=config['data']['horizons']
     #identify predictors
-    predictor_cols= [col for col in df.columns if col not in target_names]
+    predictor_cols= [col for col in df.columns if col not in target_names and 'target_' not in col] #data leakage?????????????????????
     #create system with targets first then predictors
     df_system= df[target_names+predictor_cols].copy()
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
@@ -38,29 +38,22 @@ def run_experiment(config):
     if isinstance(start_idx, slice):
         start_idx= start_idx.start  #get integer index if slice
 
-    #define max horizon to later simulate the entire path in one loop
-    max_h=max(horizons)
-
     #initialize for recursive predictions
     total_rows= len(df_system)  #total rows in data
     current_idx= start_idx
     recursive_results=[]  #to store results
+    #model config from the config file
+    model_conf= config['model']
+    lags=model_conf.get('lags',2)
+    prior_type=model_conf['prior_type']
+    prior_params=model_conf['params']
 
-    #recursive forecasting loop
+    #recursive forecasting loop (do with direct forecasting)
     while current_idx< total_rows:
         #prepare training data up to current idx
         df_train= df_system.iloc[:current_idx].copy()
         #get date
         forecast_date= df_train.index[-1]
-        #get which priors to use
-        model_conf= config['model']
-        #initialize and fit model
-        model=BVAR(lags=model_conf.get('lags',2), prior_type=model_conf['prior_type'],prior_params=model_conf['params'])
-        #fit model
-        model.fit(df_train)
-
-        #simulate forecasts up to max horizon
-        forecast_path=model.forecast(df_train, horizon=max_h)
         #iterate through all horizons to store results
         for h in horizons: 
             #target date
@@ -68,18 +61,18 @@ def run_experiment(config):
             #skip if horizon longer than available data
             if target_date not in df_yoy.index:
                 continue
-
+            #initialize and fit BVAR model
+            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params)
+            model.fit(df_train, horizon=h)
+            #forecast
+            preds_draws_all=model.forecast(df_train)
 
             #iterate through all target variables& extract results
             for var_name in target_names:
-                #define name of target col:
-                target_col_name=f"target_{var_name.lower()}_{h}m"
-                #make sure is one of the cols
-                if target_col_name not in df_train.columns:
-                    continue
+                #get col index
                 v_idx= df_system.columns.get_loc(var_name)  #get variable index
                 #extract draws for this variable and horizon(1st step of the BVAR forecast is prediction for h)
-                preds_draws= forecast_path[:, 0, v_idx]  
+                preds_draws= preds_draws_all[:, v_idx]  
                 #get actual yoy value
                 actual_yoy=df_yoy.loc[target_date, var_name]
                 
@@ -88,7 +81,7 @@ def run_experiment(config):
                     preds_draws_yoy=preds_draws
                 else:
                     #for h<12: combine history with deannualized model predictions
-                    months_back=12 - h#need the change from t-(12-h) to t
+                    months_back=12- h#need the change from t-(12-h) to t
                     history_date= forecast_date-pd.DateOffset(months=months_back)
                     #to calc price levels need levelsof core and headline cpi
                     raw_col= f"{var_name}_level"
@@ -116,6 +109,9 @@ def run_experiment(config):
                 recursive_results.append({'Date': forecast_date, 'Variable': var_name, 'Horizon': h, 'Actual': actual_yoy,
                                           'Forecast_median': median, 'q05': q05, 'q16': q16,
                                           'q84': q84, 'q95': q95, 'Steps_CRPS': crps})
+            #advance window
+            step_months=config['data'].get('retrain_step_months', 1) 
+            current_idx +=step_months
 
             
         #save and evaluate final recursive results
