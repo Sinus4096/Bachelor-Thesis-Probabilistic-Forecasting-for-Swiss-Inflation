@@ -14,5 +14,4 @@ model:
   prior_type: "natural_niw" 
   params:
     n_draws: 2000 #sampling param: direct ->no burn in      
-    lambda: 0.2    #cross-variable tightness (a2)
     alpha: 100.0  #intercept tightness (a3)

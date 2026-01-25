@@ -1,5 +1,5 @@
 import numpy as np
-from scipy import stats, optimize
+from scipy import stats, optimize, special
 #see thesis for formulas
 class BVAR:
     """
@@ -155,6 +155,48 @@ class BVAR:
         #compute log marginal likelihood
         log_ml =0.5 *(log_det_prior-log_det_post)-(T /2.0)*np.linalg.slogdet(S_post)[1]
         return log_ml   
+    
+
+    def log_ml_natural(self, log_lambda, X, Y, a3, sigmas):
+        """compute log marginal likelihood for natural niw prior"""
+        #define parameters
+        lam= np.exp(log_lambda)
+        T, N=Y.shape  #get dimensions
+        #prior based on lambda
+        Phi_0, Psi_0= self.natural_moments(N, lam, a3, sigmas)
+        Psi_0_inv= np.diag(1.0/np.diag(Psi_0))  #inverse-> prior covariance of coeffs
+        #posterior parameters
+        XX= X.T @X
+        Psi_post_inv= Psi_0_inv +XX  #posterior precision
+        #determinants
+        log_det_Psi_0_inv= np.sum(np.log(np.diag(Psi_0_inv)))
+        #log determinant of posterior precision
+        L_post_inv= np.linalg.cholesky(Psi_post_inv)
+        log_det_Psi_post_inv= 2.0*np.sum(np.log(np.diag(L_post_inv)))
+        #posterior mean
+        Phi_post=np.linalg.solve(Psi_post_inv, (Psi_0_inv @Phi_0 +X.T @Y))
+        #prior scale matrix
+        S_0= np.diag(sigmas**2)
+
+        #get posterior scale matrix via helpers
+        term_data= Y.T @Y  
+        term_prior= Phi_0.T @ Psi_0_inv @Phi_0
+        term_post= Phi_post.T @ Psi_post_inv @Phi_post
+        S_post= S_0 +term_data +term_prior -term_post
+        #get prior degrees of freedom
+        nu_0= N+2
+        nu_post= nu_0+ T    #posterior degrees of freedom
+        #log determinant of S_0
+        log_det_S_0= np.sum(np.log(np.diag(S_0)))
+        #log determinant of S_post
+        sign, log_det_S_post= np.linalg.slogdet(S_post)
+        #compute log marginal likelihood
+        term_cov=(N/2.0)*(log_det_Psi_0_inv -log_det_Psi_post_inv)
+        term_scale= (nu_0/2.0)*log_det_S_0-(nu_post/2.0)*log_det_S_post
+        const_gamma=special.multigammaln(nu_post/2.0, N)- special.multigammaln(nu_0/2.0, N)  #gamma function terms
+        log_ml= term_cov +term_scale + const_gamma- (T*N/2.0)*np.log(np.pi)
+        return log_ml
+
 
     def fit(self, data, horizon=1):
         """estimate bvar
@@ -183,18 +225,13 @@ class BVAR:
                 #def intercept tightness to 100 by default->loose (is common choice)
                 a3=self.params.get('alpha', 100.0)
 
-                #check if hierarchical (estimate lambda) or fixed
-                if isinstance(self.params.get('lambda'), dict):
-                    #glp optimization
-                    res=optimize.minimize_scalar(lambda loglam: -self.log_ml_glp(loglam, X, Y, a2, a3, sigmas), bounds=(-3.0, 0.5), method='bounded')
-                    #optimal lambda
-                    final_lambda=np.exp(res.x)
-                #else fixed lambda
-                else:
-                    final_lambda= self.params.get('lambda', 0.2)
+
+                #glp optimization
+                res=optimize.minimize_scalar(lambda loglam: -self.log_ml_glp(loglam, X, Y, a2, a3, sigmas), bounds=(-3.0, 0.5), method='bounded')
+                #optimal lambda
+                final_lambda=np.exp(res.x)
                 #get prior moments with fct
-                Phi_0, V_prior= self.minnesota_moments(N, final_lambda, a2, a3, sigmas)
-                
+                Phi_0, V_prior= self.minnesota_moments(N, final_lambda, a2, a3, sigmas)                
                 #conver cov to precision 
                 V_prior_inv=np.linalg.inv(V_prior)
                 #calculate posterior parameters
@@ -290,9 +327,12 @@ class BVAR:
             # -------------------------------------
             elif 'natural_niw' in self.prior_type:
                 #hyperparameters as before
-                a1 =self.params.get('lambda', 0.2)
                 a3= self.params.get('alpha', 100.0)
                 n_draws=self.params.get('sampling', {}).get('n_draws', 2000)
+
+                #hyperparameter optimization for lambda/a1
+                res=optimize.minimize_scalar(lambda loglam: -self.log_ml_natural(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
+                a1=np.exp(res.x)  #optimal lambda
 
                 #priors; Psi is relative tightness matrix
                 Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas)

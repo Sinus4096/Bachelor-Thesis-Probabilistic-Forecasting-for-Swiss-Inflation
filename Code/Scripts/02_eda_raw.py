@@ -90,6 +90,42 @@ plt.show()
 #prices which are excluded from the core metric. Additionally, both charts show a noticeable acceleration in the growth rate starting around 2021,
 #indicating a period of sharper inflation in recent years.
 
+#to make the shocks from pandemic and energy crisis more visible, plot YoY changes:
+#calc yoy changes
+df_yoy=df[['Headline_CPI', 'Core_CPI']].pct_change(12)*100
+#create figure
+fig=plt.figure(figsize=(15, 8), dpi=100)
+#define grid
+gs=fig.add_gridspec(1, 2, width_ratios=(4, 1), wspace=0.05)
+
+#plot lines of headline and core cpi
+ax1= fig.add_subplot(gs[0])
+ax1.plot(df_yoy.index, df_yoy['Headline_CPI'], color=headline_color, lw=1.8, label='Headline (YoY)', zorder=3)
+ax1.plot(df_yoy.index, df_yoy['Core_CPI'], color=core_color, lw=1.8, label='Core (YoY)', zorder=3)
+#add band indicating snb price stability range
+ax1.axhspan(0, 2, color='#E8F5E9', alpha=0.4, label='SNB Price Stability Range', zorder=1)
+ax1.axhline(0, color='#333333', lw=1, ls='--', zorder=2)
+#set titles and labels
+ax1.set_title('Inflation Volatility and Tail Risk Periods', fontsize=18, fontweight='bold', loc='left', pad=25)
+ax1.set_ylabel('Inflation Rate (YoY %)', fontweight='bold', fontsize=11)
+ax1.set_xlabel('Year', fontweight='bold', fontsize=11)
+#styling
+ax1.legend(loc='upper left', frameon=True, facecolor='white', framealpha=0.9)
+ax1.set_ylim(-2.5, 4.5)
+#calc kde for both series and plot on the side
+ax2 = fig.add_subplot(gs[1], sharey=ax1)
+sns.kdeplot(y=df_yoy['Headline_CPI'], ax=ax2, fill=True, color=headline_color, alpha=0.3, linewidth=1.5)
+sns.kdeplot(y=df_yoy['Core_CPI'], ax=ax2, fill=True, color=core_color, alpha=0.3, linewidth=1.5)
+#labels and styling
+ax2.set_xlabel('Frequency Density', fontweight='bold', fontsize=11)
+ax2.set_ylabel('')  #minimalism: only have 1 y axis label
+ax2.tick_params(axis='y', labelleft=False)
+for spine in ['top', 'right', 'left']:  #clean spines
+    ax2.spines[spine].set_visible(False)
+ax2.grid(axis='x', alpha=0.3)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.show()
+
 
 
 
@@ -192,6 +228,14 @@ ax.grid(True, axis='y', linestyle='--', alpha=0.5)
 ax.axhline(0, color='black', linewidth=0.8)
 
 plt.tight_layout()
+plt.show()
+
+
+#make a correlation heatmap as well
+plt.figure(figsize=(10, 8))
+corr_matrix=df.pct_change(12).corr() 
+sns.heatmap(corr_matrix, annot=True, cmap='RdBu_r', center=0, fmt='.2f')
+plt.title('Correlation Matrix of Swiss Macro Indicators (YoY %)', fontsize=14)
 plt.show()
 
 
