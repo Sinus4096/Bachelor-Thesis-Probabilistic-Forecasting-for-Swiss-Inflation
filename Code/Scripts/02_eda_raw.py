@@ -5,11 +5,9 @@ import seaborn as sns
 import numpy as np
 from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
-from statsmodels.tsa.arima_process import ArmaProcess 
 from statsmodels.tsa.stattools import adfuller
 import math
-import statsmodels.api as sm
-import statsmodels.stats.api as sms
+
 
 
 
@@ -212,14 +210,6 @@ ax.grid(True, axis='y', linestyle='--', alpha=0.5)
 ax.axhline(0, color='black', linewidth=0.8)
 
 plt.tight_layout()
-plt.show()
-
-
-#make a correlation heatmap as well
-plt.figure(figsize=(10, 8))
-corr_matrix=df.pct_change(12).corr() 
-sns.heatmap(corr_matrix, annot=True, cmap='RdBu_r', center=0, fmt='.2f')
-plt.title('Correlation Matrix of Swiss Macro Indicators (YoY %)', fontsize=14)
 plt.show()
 
 
