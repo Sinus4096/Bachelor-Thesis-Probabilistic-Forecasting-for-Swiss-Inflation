@@ -8,34 +8,12 @@ from statsmodels.graphics.tsaplots import plot_pacf
 from statsmodels.tsa.arima_process import ArmaProcess 
 from statsmodels.tsa.stattools import adfuller
 import math
-from tabulate import tabulate
+import statsmodels.api as sm
+import statsmodels.stats.api as sms
 
 
-#do 3,6,9 and 12 month forecasts-> long and short term
-#compare with out of sample method-> data got up to then model's recursive forecasting vintages, find the corresponding benchmark vintage
-#need to extract point forecast if want to compare with forecast of snb???
-#add dummy for covid? some motnhs before will know when have things closed
-#ai studios says train data til 2006 und gemini til 2009-> between
-#default facories fürs modeln
-#hyperparameter with optuna
 
-'''Recursive Updating Scheme:
-Frequency: The paper updates quarterly (every three months). You should follow this, as inflation dynamics often have a quarterly rhythm, and it makes computational sense.
-Mechanism:
-Vintage 1: Train your model using data from January 2001 up to your chosen initial cutoff (e.g., December 2005). Generate forecasts for horizons t+3, t+6, t+9, t+12 months (i.e., for Q1, Q2, Q3, Q4 2006).
-Vintage 2: Add one quarter of data (January-March 2006). Retrain the model using data from January 2001 up to March 2006. Generate forecasts for Q2, Q3, Q4 2006 and Q1 2007.
-Continue: Repeat this process, adding three months of data to your training set and re-estimating the model, until your evaluation sample (up to December 2025) is exhausted.
-Out-of-Sample Evaluation Period:
-This will start after your initial training period. If you train until December 2005, your first out-of-sample forecasts will be for early 2006.
-Your evaluation sample will range from January 2006 (or wherever your first forecast begins) until December 2025.'''
-
-'''Since QRF doesn't inherently "know" the order of time, you must explicitly create lags of your target variable ($\pi_{t-1}, \pi_{t-2}$) and other predictors to capture autoregressive dynamics.
-'''
-'''core Inflation (HICPex): Often exhibits stronger non-linear relationships, particularly with inflation expectations. Studies show QRF is especially competitive and often more accurate for Core than for Headline inflation.
-
-Headline Inflation (HICP): Driven heavily by global commodity prices (energy/food), which typically follow more linear dynamics. While QRF is still a valid tool here, linear models are often very competitive for Headline because these volatile external shocks can "overshadow" the mild non-linearities found in core components.'''
-
-#this script serves as justification for further transformations
+#this script serves as justification for further transformations-> exploratory data analysis of raw data
 
 path ='Code/Data/Cleaned_Data/data_merged.csv'
 df=pd.read_csv(path, index_col='Date', parse_dates=True)
@@ -129,7 +107,7 @@ plt.show()
 
 
 
-#time series grid for predictors:
+#time series plot for all predictors:
 
 #define X variables
 targets =['Core_CPI', 'Headline_CPI']
@@ -156,8 +134,9 @@ for fig_idx, chunk in enumerate(chunks):
         
         #drop the na's (before 2001) and plot
         series =df[var_name].dropna()
-        ax.plot(series.index, series.values, label=var_name, linewidth=2, color=x_color)
+        ax.plot(series.index, series.values, label='Raw Level', linewidth=2, color=x_color)
         ax.fill_between(series.index, series.values, color=x_color, alpha=0.1)      #fill underneath the line
+
         
         #style
         ax.set_title(var_name, fontweight='bold', fontsize=13, loc='left', pad=10)
@@ -181,19 +160,24 @@ for fig_idx, chunk in enumerate(chunks):
 
 
 
-#observations:
+#observations as output:
+data={
+    "variable":["kofbarometer", "unemployment_rate", "oilprices", "gdp_index_ch", "gdp_index_eu", "infl_e_current_year", "infl_e_next_year", 
+        "Saron_Rate", "CH_2int", "fin_spread", "EU_fin_spread", "Wage_change", "PPI", "real_turnover", "retail_turnover", "Exchange_Rate_CHF", "variable_mortgages", "Vol_loans", 
+        "M1_change", "M2_change", "M3_change", "Manufacturing_EU", "Business_Confidence_EU"],
+    "trend":["Stationary/mean-reverting around 100", "Cyclical phases: downward 2010-2020", "Upward 2000-2008, volatile since 2008", "Clear upward trend", 
+        "Clear upward trend", "Stationary (0-1%) with structural break 2021", "Stationary (0-1%) with structural break 2021", "Downward 2000-2015, Upward since 2022",
+        "Downward 2000-2015, Upward since 2022", "Mean-reverting, no long-term slope","Mean-reverting with large cyclical swings", "High volatility, no long-term trend",
+        "Slight upward trend, sharp upward 2021", "Clear long-term upward trend","Clear long-term upward trend", "N/A", "N/A", "Strong upward trend",
+        "Mean-reverting, no long-term slope", "Mean-reverting, no long-term slope","Cyclical waves, no clear trend", "Long term upward trend", "Cyclical series"],
+    "seasonality": ["None visible", "Jagged, some residual seasonality", "None visible", "None visible", "None visible", "Hard to detect (high volatility)", 
+        "None visible", "None visible (policy-controlled)", "None visible","None visible", "None visible", "Spikiness at regular intervals","None visible", "Jagged, possible residual fluctuations", "None visible",
+        "N/A", "N/A", "None visible", "None visible", "None visible","None visible", "None visible", "None visible"]}
 
-#1. Variables like gdp_index, PPI, and Vol_loans exhibit clear deterministic or stochastic trends. I will apply log-differences 
-# ($\Delta \ln(x)$) to convert these into growth rates to prevent spurious regression in the BVAR and ensure the QRF can handle 
-# future values.
-
-#2. Survey indicators (kofbarometer) and variables already expressed as changes (M1_change) appear mean-reverting. I will verify 
-# stationarity with an ADF test; if $p < 0.05$, I will use them in their current form to preserve the signals.
-
-#3. Interest rate variables (Saron_Rate) show structural breaks and long periods of zero-volatility. I will check for 'Unit Roots' 
-# carefully here, as the standard ADF test can sometimes be misled by structural shifts.
-
-
+#create DataFrame
+df_summary =pd.DataFrame(data)
+#display the table
+print(df_summary.to_string(index=False))
 
 
 
@@ -309,43 +293,28 @@ for start_idx in range(0, len(all_vars), vars_per_fig):
 
 
 
-#observations:
-#Core_CPI /Headline_CPI: The ACF shows a very slow linear decay, while the PACF has a sharp spike at lag 1; this is a sign of 
-# non-stationarity. 
-#kofbarometer: The ACF drops toward zero relatively quickly and even turns negative, suggesting this survey-based indicator is already 
-# stationary.-> ADF test to verify but can likely use this in its raw level format.
-# unemployment_rate: displays a very persistent ACF, indicating it is non-stationary and likely follows a random walk. -> probably use 
-# the first difference (change in percentage points) for the models.
-#oilprices: The ACF remains significantly above the confidence interval for over 30 lags, confirming non-stationarity.-> will likely have to
-# transform into log-returns to capture price shocks rather than price levels.
-#gdp_index_x /gdp_index_y: These show the strongest trend of all variables with almost no decay in the ACF.->must calculate quarterly 
-# or yearly growth rates for these to be usable in the models.
-#infl_e_current_year /infl_e_next_year: These expectations are quite persistent but show a faster ACF decay than the CPI itself. 
-#However, to stay consistent with the inflation targets, using the change in expectations is probably best.
-#Saron_Rate / CH_2int: Both show very high autocorrelation at nearly all lags, typical of interest rate levels in trending environments.
-#->will likely use the first difference to model the change in monetary policy.
-#fin_spread: The ACF decays more quickly than the interest rates themselves but remains above the threshold for many lags. -> wait for ADF
-#test to make decision
-#retail_turnover: The ACF remains significantly high for all 40 lags, indicating a strong trend and non-stationarity.-> will usse
-# log-growth rates to model the percentage change in retail activity.
-#real_turnover: Similar to retail, the ACF exhibits almost no decay, confirming it is non-stationary. -> also log-growth transformation
-# Manufacturing_EU: Shows a persistent, slow-decaying ACF typical of a non-stationary structural trend. The PACF spike at lag 1 
-# suggests an AR(1) process in the trend.
-#PPI: The ACF stays above the confidence interval for the entire window, signifying non-stationarity. This reflects long-term price 
-# level drift that needs to be converted into inflation rates.
-#Vol_loans: This displays the highest persistence of all variables, with a nearly flat ACF at 1.0, indicating it is strongly non-stationary. 
-# -> will use log-differences to capture the growth in credit volume.
-#M1_change, M2_change, & M3_change: These show a much faster ACF decay compared to other variables, reaching zero around lag 15. While 
-# they are "changes," they still exhibit some persistence;-> need to verify with an ADF test, as they may be near-stationary.
-#Exchange_Rate_CHF: The ACF decays very slowly, a sign that exchange rate levels are non-stationary (random walk). -> probably use log returns
-#variable_mortgages: Displays extreme persistence in the ACF, typical of "sticky" interest rate levels, making it non-stationary. 
-# -> will likely use first differences to model mortgage rate adjustments.
-#EU_fin_spread: The ACF decays notably faster than the base interest rates but remains significant for many lags, suggesting it is non-stationary
-# or highly persistent. The PACF shows a significant spike at lag 1.
-#Business_Confidence_EU: The ACF crosses into negative territory and oscillates, which is a common pattern for stationary or cyclical 
-# indicators. -> make ADF test but might be able to use var in levels.
-#Wage_change: Shows moderate persistence with the ACF dropping to near-zero after lag 15-20. Like the money supply changes, it is closer 
-# to stationarity than the index variables.
+#observations as output table:
+acf_pacf_data = {
+    "variable": ["Core&Headline CPI", "kofbarometer", "unemployment_rate", "oilprices","gdp_index_ch_eu", "infl_e", "Saron_Rate_CH_2int", "fin_spread",
+        "EU_fin_spread", "Wage_change", "PPI", "real_turnover","M1_M2", "M3_change", "Manufacturing_EU", "Business_Confidence_EU"],
+    "acf_observation": ["Very slow linear decay -> strong trend", "Decays faster, wave like (-> cyclicality)", "Slow decay -> persistent trend, reversal to negative values (cyclicality)", 
+        "Slow linear decay -> strong trend", "Extremely slow decay, very strong trend", "Moderately slow decay -> persistent trend-like behavior", 
+        "Very slow linear decay -> strong trend", "Slow decay -> short-to-medium term", "Slow decay -> medium term trend-like behavior", "Moderately slow decay -> persistent trend-like behavior", 
+        "Extremely slow decay, very strong trend", "Extremely slow decay, very strong trend", "Moderate decay -> persistence in short-to-medium term, mean-reverting", 
+        "Decays more slowly -> stronger trend component", "Extremely slow decay, very strong trend","Decays relatively quickly, signature of a cyclical series" ],
+    "pacf_observation": ["Dominant spike at lag 1 -> random walk dominance", "Significant spike at lag 1, spike at lag 2 -> AR(2)", "High spike at lag 1, negative spike at lag 2 -> AR(2) structure", 
+        "Significant spike at lag 1, spike at lag 2 -> AR(2)", "Massive spike at lag 1 -> random walk with drift", "High spike at lag 1 -> AR structure", 
+        "Massive spike at lag 1 -> random walk with drift", "High spike at lag 1 -> AR structure", 
+        "Significant spike at lag 1, negative spike at lag 2 -> AR(2)", "Significant spike at lag 1 and 2 -> AR(2) structure", 
+        "Significant spike at lag 1 and 2 -> AR(2) structure", "Massive spike at lag 1 -> random walk with drift", "Significant spike at lag 1, negative spike at lag 2 -> AR(2)", 
+        "Large spike at lag 1 and smaller spike at lag 2", "Massive spike at lag 1 -> random walk with drift", "Significant spike at lag 1 and 2 -> AR(2) structure" ],
+    "seasonality_notes": ["No obvious repeating spikes" ] * 16 #all same obs->*16
+}
+
+#df
+df_acf_pacf=pd.DataFrame(acf_pacf_data)
+#display
+print(df_acf_pacf.to_string(index=False))
 
 
 
@@ -387,13 +356,30 @@ adf_table=pd.DataFrame(adf_results)
 print("\n Augmented Dickey-Fuller Test Results: ")
 print(adf_table) 
 
+#--------------------------------
+#decisions for critical cases and general summary
+#--------------------------------
 
-#identified problem with AIC:
-#AIC is great to pick "best" lag, but for M1/M2/M3 it's picking 15+ lags-> it means that the model is struggling to clear out the noise.
-#Furthermore for monthly data with seasonality, the test can miss the 12th month if we don't allow it to look far enough.
-# what to do? for specific vars difference and then redo acf, pacf and adf
-# which vars? the ones with high ADF p-values and high lag counts, like retail_turnover (11 lags) and the M-changes (15-16 lags)
-# (as these often hide seasonal patterns)
+#Comparison to the visual analysis and acf/pacf plots:
+#No contradicions:
+#GDP, PPI, Turnover, Loans, and manufacturing: very high p-values, matches the strong upward trend and slow-decaying acf ->take log differences
+#kofbarometer & business_confidence both have p-values of 0-> mean-reverting cyclical indicators with no long-term trend -> keep levels
+#M1 & M2: visual inspection showed stationary growth rates and p<0.05 -> keep as they are
+#inflation expectations: p<0.01-> stationary-> keep levels
+#exchange rate: acf-> long decay and p=0.31 -> take log differences
+
+#Contradictions: 
+#interest rates (saron & variable morgages: look non-stationaryas were moving in long steps trending slightly upward but p<0.01-> stationary ->leave at levels
+#fin spread (EU&CH): looked stationary, adf-> non stationary-> keep as levels, adf test might have struggled to distinguish from non stationary RW
+# -> leave as they are to avoid introducing non-stationary noise in models
+#wage change: appeared stationary, adf non stationary, acf->moderate decay, pacf->AR(2)-> keep as levels to avoid introducing non-stationary noise &keep it interpretable
+#reason in levels preserves distinction between high-wage and low-wage regimes, allowing the QRF to capture state-dependent threshold effects
+#M3: looked similar to M2&M1 but non stationary; trend-like quality-> take differences (not log diff. because already is change in variables-> has negative values)
+#reason: persistent cyclical waves containing valuable predictive memory, which the BVAR can effectively model using shrinkage priors
+
+#Borderline cases:
+#CH2int: p=0.056-> edge case between random walk and mean-reverting-> keep in levels to not have a highly volatile change in rate
+
 
 
 
@@ -408,9 +394,9 @@ print(adf_table)
 #---------------------------------
 #1. vars with strong trend:
 #trend is so dominant that it hides seasonal signa, once calculate the log-growth ratem, trend is removed-> hidden seasonal spikes will become visible.
-trending_vars=['Core_CPI', 'Headline_CPI', 'gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans']
+trending_vars=['Core_CPI', 'Headline_CPI', 'gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans','Exchange_Rate_CHF']
 
-#take log growth rates (*100 to have % changes)
+#take log growth rates and not just differences to make it comparable to target variables
 df_growth=np.log(df[trending_vars]).diff().dropna()*100
 
 #start the plotting to see if there is seasonal pattern now:
@@ -421,7 +407,7 @@ vars_per_fig=4
 #def chunknr for title
 chunk_nr=1
 
-#loop through variables in chunks
+#loop through variables in chunks to plot acf/pacf
 for start_idx in range(0, len(trending_vars), vars_per_fig):
     
     #def current chunk
@@ -457,10 +443,10 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
     
-#all look good except for core and headline cpi: have clear trend appearing in the acf plot-> will take YoY changes for the two:  
-#first drop the two cpi cols bc want to replace them with their yoy changes 
+#all look good except for core and headline cpi: can take both away if do .diff(12).diff(), but then lose interpretability of predictions and probably take out too much info
+#->try to use annualized % changes as in ecb working paper:
 df_growth=df_growth.drop(['Core_CPI', 'Headline_CPI'], axis=1)
-#calculate yoy changes
+#calculate annualized % changes for both cpi variables as new target variables
 horizons=[3, 6, 9, 12]
 for h in horizons:
     df_growth[f'target_headline_{h}m'] =(12/h)*(np.log(df['Headline_CPI']).diff(h))* 100
@@ -468,30 +454,46 @@ for h in horizons:
 
 #check whether cols exist now:
 df_growth.columns
-#redo acf check for the two cols to check whether looks stationary now:
-#define fig
-fig, axes=plt.subplots(nrows=len(df_growth.columns), ncols=2, figsize=(16, 10))
-#loop through the target variables
-for i, var_name in enumerate(df_growth.columns):
-        #get data and drop NA's
-        series=df_growth[var_name].dropna()
-        #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})        
-        #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
+#redo acf check for the cols to check whether look near stationary now:
+variables_to_plot= [f'target_headline_{h}m' for h in horizons]+[f'target_core_{h}m' for h in horizons]
+#use 4 rows per plot
+rows_per_plot = 4
+#create chunks
+variable_chunks=[variables_to_plot[i:i+rows_per_plot] for i in range(0, len(variables_to_plot), rows_per_plot)]
+
+#loop through chunks and get acf and pacf plots
+for part_num, chunk in enumerate(variable_chunks):
+    
+    # Create figure for this chunk
+    # nrows is len(chunk) in case the last part has fewer than 4 rows
+    fig, axes=plt.subplots(nrows=len(chunk), ncols=2, figsize=(16, 4*len(chunk)))
+    
+    # Handle case where there is only 1 row (axes becomes 1D array)
+    if len(chunk)== 1:
+        axes=np.expand_dims(axes, axis=0)
+
+    # Loop through the variables in this specific chunk
+    for i, var_name in enumerate(chunk):
+        #gat data and drop NA's
+        series=df_growth[var_name].dropna()        
+        #ACF
+        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors":color_acf})        
+        #PACF
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})        
         #styling
         for ax in axes[i]:
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            ax.set_ylim(-1.1, 1.1)
             ax.tick_params(axis='both', which='major', labelsize=10)
-#figure title for all chunks
-fig.suptitle(f'ACF & PACF Plots of YoY %-Changes of CPI Variables', fontsize=22, fontweight='bold')
-#plot
-plt.tight_layout()
-plt.show()
+
+    #figure title for all chunks
+    fig.suptitle(f'ACF & PACF Plots (Part {part_num + 1})', fontsize=22, fontweight='bold')    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.92) 
+    plt.show()
+
+#still see high persistence especially when h increases, still choose this approach: see thesis chapter 3.1
 
 #do adf test
 adf_results=[]
@@ -507,98 +509,8 @@ adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results for Trending Variables: ")
 print(adf_table) 
-#remark: we saw that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
+#remark:with experimetning, we can see that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
 #as the acf shows clear seasonal spikes when taking diff alone it's not stationary either
 #decision for CPI: like reference paper see word document.
-
-
-#2. simple differencing for non-stationary variables:
-#these variables were non-stationary in the adf test but looked stationary: try to difference once and redo adf test:
-
-
-#Exchange_Rate	Difference (Log)	% Appreciation/Depreciation	Highly Recommended. Levels are useless for forecasting here.
-#Wage_change	Caution	Wage Acceleration	Check plot first. If it looks like it fluctuates around a mean, do not difference. Only difference if there is a clear upward/downward trend in the growth rate itself.
-#M3_change	Caution	Monetary Impulse	Check plot first. M3 growth is volatile. Differencing it creates "noise on noise," which might confuse the Random Forest
-non_s_vars= ['Wage_change','Exchange_Rate_CHF','M3_change']
-#take differences of those 
-df_non_s = df[non_s_vars].diff().dropna()
-
-#rerun adf for differenced vars:
-
-#initialize list for resutls
-adf_results=[]
-#loop through all variables of df
-for col in df_non_s.columns:
-    #all cols shoul dbe float (from preprocessing) but still check to avoid errors
-    if pd.api.types.is_numeric_dtype(df_non_s[col]):
-        res=run_adf_test(df_non_s[col], col)
-        adf_results.append(res)
-
-
-#to df for nice tabular display
-adf_table=pd.DataFrame(adf_results)
-#display the table
-print("\n Augmented Dickey-Fuller Test Results for Non-Stationary Variables: ")
-print(adf_table) 
-
-
-
-#-----------------------------------------------
-#Result Overview
-#-------------------------------------------------
-
-
-
-#write a summary of the results seen above
-data =[{"Variable": "CPI Targets (Core/Headline)", "Time Series Visual": "Persistent upward trend; acceleration post-2021.", "ACF/PACF Pattern": "Very slow ACF decay; PACF spike at lag 1.",
-        "ADF Result (p-value)": "Non-Stationary (0.85 /0.81)", "How to proceed": "Use Log-Growth Rates (Inflation)."},
-    {"Variable": "GDP Indexes (ch and eu)", "Time Series Visual": "Smooth, continuous upward trend since 2000.", "ACF/PACF Pattern": "Extremely high ACF persistence (near 1.0).",
-        "ADF Result (p-value)": "Non-Stationary (0.95 /0.89)", "How to proceed": "Use Log-Growth Rates."},
-    {"Variable": "Sentiment (KOF /Business Conf.)", "Time Series Visual": "Mean-reverting; cyclical 'waves' around a constant.",
-        "ACF/PACF Pattern": "ACF drops to zero quickly; some oscillation.", "ADF Result (p-value)": "Stationary (0.000)","How to proceed": "Use Levels (Raw data)."},
-    {"Variable": "PPI & Turnover (Retail/Real)", "Time Series Visual": "Distinct upward trend; Retail shows higher noise.", "ACF/PACF Pattern": "ACF remains above confidence interval for 40 lags.",
-        "ADF Result (p-value)": "Non-Stationary (0.38 /0.94 /0.83)", "How to proceed": "Use Log-Growth Rates."},
-    {"Variable": "Monetary Changes (M1, M2, M3)", "Time Series Visual": "High-frequency volatility; spikes around 2020.",
-        "ACF/PACF Pattern": "Faster decay, but high lag count used in ADF.", "ADF Result (p-value)": "Stationary (except M3)", "How to proceed": "Use Levels (verify seasonality)."},
-    {"Variable": "Interest Rates (Saron/Mortgages)", "Time Series Visual": "Long periods of zero followed by sudden spikes.",
-        "ACF/PACF Pattern": "Highly persistent ACF; PACF lag 1 dominance.", "ADF Result (p-value)": "Stationary (<0.05)",
-        "How to proceed": "Use Levels (but watch for breaks)."},
-    {"Variable": "Vol_loans", "Time Series Visual": "Clean, linear upward trajectory.", "ACF/PACF Pattern": "Absolute persistence (ACF stays at 1.0).",
-        "ADF Result (p-value)": "Non-Stationary (0.99)", "How to proceed": "Use Log-Growth Rates."},
-    {"Variable": "Spreads (Fin/EU_Fin)", "Time Series Visual": "Regime-based shifts; spikes during crises (2008/2012).", "ACF/PACF Pattern": "Slow decay; significant autocorrelation.",
-        "ADF Result (p-value)": "Borderline (0.15 /0.05)", "How to proceed": "Use First Differences."},
-    {"Variable": "Manufacturing_EU", "Time Series Visual": "Structural upward drift with cyclicality.",
-        "ACF/PACF Pattern": "Persistent ACF; significant lag-1 PACF.","ADF Result (p-value)": "Non-Stationary (0.79)",
-        "How to proceed": "Use Log-Growth Rates."}]
-
-#make df out of it
-df_summary =pd.DataFrame(data)
-#make nice table out of it for the terminal
-table=tabulate(df_summary, headers='keys', tablefmt='grid', showindex=False, maxcolwidths=[20, 25, 25, 20, 20])
-
-#print overview
-print("\n Overview Test Results:")
-print(table)
-
-
-
-
-#split into train and test set to avoid data leakage
-
-#not adding covid dummies because would be cheating as motivation is to find a model that better copes with the post 2020 period
-#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-#split into one df for core inflation and one for headline inflation
-
-#take log then yearly changes depending on variables maybe also from them
-
-
-
-
-
-
-#stabilize the variance
-
-
 
 
