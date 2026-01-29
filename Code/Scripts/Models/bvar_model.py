@@ -109,9 +109,9 @@ def run_experiment(config):
                 recursive_results.append({'Date': forecast_date, 'Variable': var_name, 'Horizon': h, 'Actual': actual_yoy,
                                           'Forecast_median': median, 'q05': q05, 'q16': q16,
                                           'q84': q84, 'q95': q95, 'Steps_CRPS': crps})
-            #advance window
-            step_months=config['data'].get('retrain_step_months', 1) 
-            current_idx +=step_months
+        #advance window
+        step_months=config['data'].get('retrain_step_months', 1) 
+        current_idx +=step_months
 
             
         #save and evaluate final recursive results
@@ -119,7 +119,7 @@ def run_experiment(config):
         results_df.set_index('Date', inplace=True)
         out_dir = Path("Results/Data_experiments")
         out_dir.mkdir(parents=True, exist_ok=True)
-        save_name=f"Results/Data_experiments/recursive_{config['experiment_name']}_{var_name}_{h}m.csv"
+        save_name=f"Results/Data_experiments/{config['experiment_name']}_{var_name}_{h}m.csv"
         results_df.to_csv(save_name)
 
 

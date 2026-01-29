@@ -1,32 +1,27 @@
-from scipy.optimize import minimize
+import numpy as np
+import pandas as pd
 from scipy.stats import nct
-#helper fct to fit skew-t parameters 
+from scipy.optimize import least_squares
+from scipy.integrate import quad
 
-def fit_skew_t_params(target_quantiles, target_values):
-    """
-    Fits Skew-t parameters (df, nc, loc, scale) to match QRF quantiles.
-    
-    Args:
-        target_quantiles: list of probabilities e.g. [0.05, 0.25, 0.5, 0.75, 0.95]
-        target_values: the values predicted by QRF for those quantiles
-    Returns:
-        tuple: (df, nc, loc, scale)
-    """
-    # Initial guesses: df=10, nc(skew)=0, loc=median, scale=interquartile range
-    initial_guess = [10, 0, np.median(target_values), np.std(target_values)]
-    
-    # Objective function: Minimize Sum of Squared Errors between QRF and Skew-t quantiles
-    def objective(params):
-        df, nc, loc, scale = params
-        if df <= 2 or scale <= 0: # Constraints: df > 2 for variance, scale > 0
-            return np.inf
-        
-        # Calculate theoretical quantiles for these parameters
-        theoretical_values = nct.ppf(target_quantiles, df, nc, loc=loc, scale=scale)
-        
-        # Calculate Squared Error
-        return np.sum((theoretical_values - target_values) ** 2)
+#helper fct to fit skew-t parameters -> can compare the models
 
-    # Run optimization
-    result = minimize(objective, initial_guess, method='Nelder-Mead')
-    return result.x
+def fit_skew_t(quantiles_yoy, quantile_levels, actual_value):
+    """fct only needed for qrf, as BVAR uses its own density fitting approach"""
+    #define error fct for  optimization: want to min diff between qrf quantiles and theoretical quantiles of skew-t distribution
+    def loss_fct(params, x_quantiles, q_levels):
+        df, nc, loc, scale=params   #unpack params
+        #have constraints that df>2, scale>0
+        if df<=2 or scale<=0:
+            return 1e6  #large penalty
+        #get theoretical quantiles 
+        theo_quantiles=nct.ppf(q_levels, df, nc, loc=loc, scale=scale)
+        #return difference between theo and empirical quantiles 
+        return theo_quantiles-x_quantiles
+    #initial parameter guesses
+    init_params=[10.0, 0.0, np.median(quantiles_yoy), np.std(quantiles_yoy)]
+    #optimize the loss fct 
+    bounds = ([1.0, -10.0, -np.inf, 0.001], [100.0, 10.0, np.inf, np.inf])   #set bounds:df >= 1, scale >= 0.001
+    res= least_squares(loss_fct, init_params, args=(quantiles_yoy, quantile_levels), bounds=bounds)
+    return res.x
+
