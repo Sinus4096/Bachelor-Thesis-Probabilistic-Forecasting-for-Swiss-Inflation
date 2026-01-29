@@ -6,9 +6,9 @@ from scipy.integrate import quad
 
 #helper fct to fit skew-t parameters -> can compare the models
 
-def fit_skew_t(quantiles_yoy, quantile_levels, actual_value):
+def fit_skew_t(quantiles_yoy, quantile_levels):
     """fct only needed for qrf, as BVAR uses its own density fitting approach"""
-    #define error fct for  optimization: want to min diff between qrf quantiles and theoretical quantiles of skew-t distribution
+    #define error fct for  optimization: want to min diff between qrf quantiles and theoretical quantiles of skew-t distribution (as function for simplicity)
     def loss_fct(params, x_quantiles, q_levels):
         df, nc, loc, scale=params   #unpack params
         #have constraints that df>2, scale>0

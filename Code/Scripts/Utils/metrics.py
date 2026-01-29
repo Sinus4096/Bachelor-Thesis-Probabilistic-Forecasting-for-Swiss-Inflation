@@ -39,10 +39,23 @@ def calculate_crps(y_true, params):
     """ cacl crps for a skew-t distribution against actual value"""
     #unpack params
     df, nc, loc, scale=params
-    #set integration limits (=mean +/- 10 std devs)
-    lower_lim=loc-10*scale
-    upper_lim=loc+10*scale
+    #handle NAN if fitting faile
+    if np.isnan(df):
+        return np.nan
+    #set integration limits: go far out into the tails to ensure capture fat tails
+    lower_lim=nct.ppf(1e-6, df, nc, loc=loc, scale=scale)
+    upper_lim=nct.ppf(1 - 1e-6, df, nc, loc=loc, scale=scale)
+    #quickly ensure that bounds cover y_true
+    lower_lim= min(lower_lim, y_true-10*scale)
+    upper_lim= max(upper_lim, y_true+10*scale)
+    def integrand_left(z):
+        """integral from lower_bound to y_true"""
+        return nct.cdf(z, df, nc, loc=loc, scale=scale)**2
+    def integrand_right(z):
+        """integral from y_true to upper_bound"""
+        return (1.0 -nct.cdf(z, df, nc, loc=loc, scale=scale))**2
     
     #perform integration-> calc crps
-    crps_val, _=quad(lambda z: (nct.cdf(z, df, nc, loc=loc, scale=scale)-(1.0 if z >=y_true else 0.0))**2,lower_lim, upper_lim)
-    return crps_val
+    res_left,_= quad(integrand_left, lower_lim, y_true)
+    res_right,_= quad(integrand_right, y_true, upper_lim)
+    return res_left+res_right

@@ -8,10 +8,15 @@ from quantile_forest import RandomForestQuantileRegressor
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
-#look for utils 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from scipy.stats import nct
+#get path for utils
+current_dir=Path(__file__).resolve().parent
+#get project root
+project_root= current_dir.parent.parent
+sys.path.append(str(project_root))
+#import needed utils
 from Utils.metrics import qrf_crps_scorer, calculate_crps
-from pathlib import Path
+from Utils.density_fitting import fit_skew_t
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
 def load_config(config_path):
@@ -130,6 +135,8 @@ def run_experiment(config):
 
                 #use final params determined by which model use
                 model_args=final_params.copy()
+                #ensure reproducibility
+                model_args['random_state']=42
 
                 #train model
                 model= RandomForestQuantileRegressor(**model_args)
@@ -168,15 +175,23 @@ def run_experiment(config):
                         pred_dense_h_step= preds_dense[idx:idx+1] *scaling_factor
                         pred_plot_h_step= preds_plot[idx:idx+1] *scaling_factor 
                         #combine
-                        preds_dense_yoy=base_effect + pred_dense_h_step
-                        preds_plot_yoy= base_effect + pred_plot_h_step
+                        preds_dense_yoy=base_effect +pred_dense_h_step
+                        preds_plot_yoy= base_effect+pred_plot_h_step
 
-                     
-                     #calc step-specific CRPS: compare model preds(annualized h-month) vs actual yoy
-                     step_crps=calculate_crps([actual_val], preds_dense_yoy, eval_quantiles)
+                     #flatten to 1D array to fit skew-t distribution later
+                     y_fit_data=preds_dense_yoy.flatten()
+                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+
+                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
+                     pit_val =nct.cdf(actual_val, df=skew_params[0], nc=skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                     #calc step-specific CRPS
+                     parametric_crps=calculate_crps(actual_val, skew_params)
+                     #want to calc empirical crpsto see how much smoothing the skew-t fit changed the result
+                     empirical_crps= qrf_crps_scorer([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
-                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Steps_CRPS': step_crps}
+                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
+                             'Skewt_df': skew_params[0], 'Skewt_nc': skew_params[1], 'Skewt_loc': skew_params[2], 'Skewt_scale': skew_params[3], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter

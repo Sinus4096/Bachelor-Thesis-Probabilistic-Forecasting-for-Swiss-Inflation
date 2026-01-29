@@ -411,10 +411,8 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df_growth[var_name].dropna()
-        
         #acf plot
         plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
         #pacf plot
         plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
         
@@ -453,16 +451,13 @@ variable_chunks=[variables_to_plot[i:i+rows_per_plot] for i in range(0, len(vari
 
 #loop through chunks and get acf and pacf plots
 for part_num, chunk in enumerate(variable_chunks):
-    
-    # Create figure for this chunk
-    # nrows is len(chunk) in case the last part has fewer than 4 rows
-    fig, axes=plt.subplots(nrows=len(chunk), ncols=2, figsize=(16, 4*len(chunk)))
-    
-    # Handle case where there is only 1 row (axes becomes 1D array)
+    #create figure
+    fig, axes=plt.subplots(nrows=len(chunk), ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
+    #handle case where there is only 1 row (axes becomes 1D array)
     if len(chunk)== 1:
         axes=np.expand_dims(axes, axis=0)
 
-    # Loop through the variables in this specific chunk
+    #loop through vars
     for i, var_name in enumerate(chunk):
         #gat data and drop NA's
         series=df_growth[var_name].dropna()        
@@ -475,12 +470,12 @@ for part_num, chunk in enumerate(variable_chunks):
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            ax.set_ylim(-1.1, 1.1)
             ax.tick_params(axis='both', which='major', labelsize=10)
 
     #figure title for all chunks
     fig.suptitle(f'ACF & PACF Plots (Part {part_num + 1})', fontsize=22, fontweight='bold')    
     plt.tight_layout()
-    plt.subplots_adjust(top=0.92) 
     plt.show()
 
 #still see high persistence especially when h increases, still choose this approach: see thesis chapter 3.1
