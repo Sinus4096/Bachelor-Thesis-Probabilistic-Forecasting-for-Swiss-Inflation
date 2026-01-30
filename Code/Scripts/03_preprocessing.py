@@ -51,7 +51,7 @@ print(nans_per_column)
 #use 1-month growth rates (pi_t^1) as autoregressive lags
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
-#add 1- and 2-month lags
+#add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
 for i in [1, 2]:
     df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
     df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
@@ -60,7 +60,7 @@ for i in [1, 2]:
 
 
 #--------------------------
-#add Monthly Cycle features: sine/consine transformations
+#add Cycle features: sine/consine transformations
 #--------------------------------
 #are better than adding monthly dummies for bvar model as they do not eat up so many degrees of freedom
 period = 12

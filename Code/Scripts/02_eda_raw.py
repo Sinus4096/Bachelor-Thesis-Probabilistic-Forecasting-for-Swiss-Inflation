@@ -444,27 +444,32 @@ for h in horizons:
 df_growth.columns
 #redo acf check for the cols to check whether look near stationary now:
 variables_to_plot= [f'target_headline_{h}m' for h in horizons]+[f'target_core_{h}m' for h in horizons]
-#use 4 rows per plot
-rows_per_plot = 4
-#create chunks
-variable_chunks=[variables_to_plot[i:i+rows_per_plot] for i in range(0, len(variables_to_plot), rows_per_plot)]
+#restrict number of figures to 5
+vars_per_fig=4
+#def chunknr for title
+chunk_nr=1
 
-#loop through chunks and get acf and pacf plots
-for part_num, chunk in enumerate(variable_chunks):
-    #create figure
-    fig, axes=plt.subplots(nrows=len(chunk), ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
-    #handle case where there is only 1 row (axes becomes 1D array)
-    if len(chunk)== 1:
-        axes=np.expand_dims(axes, axis=0)
-
-    #loop through vars
+#loop through variables in chunks
+for start_idx in range(0, len(variables_to_plot), vars_per_fig):
+    
+    #def current chunk
+    chunk =variables_to_plot[start_idx: start_idx+vars_per_fig]
+    n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
+    
+    # Create fig. squeeze=False ensures 'axes' is ALWAYS a 2D array [row, col]
+    fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
+    
+    #loop through vars in chunk
     for i, var_name in enumerate(chunk):
-        #gat data and drop NA's
-        series=df_growth[var_name].dropna()        
-        #ACF
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors":color_acf})        
-        #PACF
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})        
+        #get data and drop NA's (before 2001)
+        series=df_growth[var_name].dropna()
+        
+        #acf plot
+        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #pacf plot
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
         #styling
         for ax in axes[i]:
             ax.spines['top'].set_visible(False)
@@ -472,12 +477,13 @@ for part_num, chunk in enumerate(variable_chunks):
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
             ax.set_ylim(-1.1, 1.1)
             ax.tick_params(axis='both', which='major', labelsize=10)
-
     #figure title for all chunks
-    fig.suptitle(f'ACF & PACF Plots (Part {part_num + 1})', fontsize=22, fontweight='bold')    
+    fig.suptitle(f'ACF & PACF Plots of Annualized Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
+    #plot
     plt.tight_layout()
     plt.show()
-
+    #add 1 to chunknr for next chunk plot
+    chunk_nr+=1
 #still see high persistence especially when h increases, still choose this approach: see thesis chapter 3.1
 
 #do adf test

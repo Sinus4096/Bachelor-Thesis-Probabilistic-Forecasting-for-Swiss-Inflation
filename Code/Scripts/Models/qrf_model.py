@@ -8,6 +8,7 @@ from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from scipy.stats import nct
+from scipy.stats import skewnorm
 #get path for utils
 current_dir=Path(__file__).resolve().parent
 #get project root
@@ -15,8 +16,8 @@ scripts_root = current_dir.parent.parent
 sys.path.insert(0, str(scripts_root))
 
 #import needed utils
-from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse
-from Scripts.Utils.density_fitting import fit_skew_t
+from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
+from Scripts.Utils.density_fitting import fit_skew_normal
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -147,17 +148,20 @@ def run_experiment(config):
                 model.fit(X_train, Y_train)
                 #predict key quantiles for evaluation and plotting
                 plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
-                preds_plot= model.predict(X_test, quantile=plot_quantiles)    #pre safe the predictions
+                preds_plot=model.predict(X_test, quantiles=list(plot_quantiles))    #pre safe the predictions
                 
                 #predict dense grid for CRPS and fan charts
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
-                preds_dense = model.predict(X_test, quantile=eval_quantiles)
+                preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
                 #store the resultes nicer in predefined list
                 for idx, date_idx in enumerate(test_indices):
                      #get date/origin of forecast
                      forecast_date= df.index[date_idx]
                      #calc evaluation target date: add h months to current date
                      target_date=forecast_date+pd.DateOffset(months=h)
+                     #check if target date exists in df_yoy (if not, cannot evaluate)
+                     if target_date not in df_yoy.index:
+                         break 
                      #get actual value from df_yoy
                      actual_val= df_yoy.loc[target_date, yoy_col] 
 
@@ -183,20 +187,20 @@ def run_experiment(config):
                         preds_plot_yoy= base_effect+pred_plot_h_step
                      #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
                      sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
-                     #flatten to 1D array to fit skew-t distribution later
+                     #flatten to 1D array to fit skew-normal distribution later
                      y_fit_data=preds_dense_yoy.flatten()
-                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+                     skew_params=fit_skew_normal(y_fit_data, eval_quantiles)  #fit skew-normal, get params by the 99 points
 
-                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
-                     pit_val =nct.cdf(actual_val, df=skew_params[0], nc=skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                     #calc PIT (for plotting later): cdf of actual value under fitted skew-normal
+                     pit_val= skewnorm.cdf(actual_val, skew_params[0], loc=skew_params[1], scale=skew_params[2])
                      #calc step-specific CRPS
                      parametric_crps=calculate_crps(actual_val, skew_params)
-                     #want to calc empirical crpsto see how much smoothing the skew-t fit changed the result
-                     empirical_crps= qrf_crps_scorer([actual_val], preds_dense_yoy, eval_quantiles)
+                     #want to calc empirical crpsto see how much smoothing the skew-normal fit changed the result
+                     empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
                              'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                             'Skewt_df': skew_params[0], 'Skewt_nc': skew_params[1], 'Skewt_loc': skew_params[2], 'Skewt_scale': skew_params[3], 'PIT': pit_val}
+                             'Skewnorm_shape': skew_params[0], 'Skewnorm_loc': skew_params[1], 'Skewnorm_scale': skew_params[2], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter
@@ -205,7 +209,7 @@ def run_experiment(config):
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/Data_experiments/{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments2/{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 
