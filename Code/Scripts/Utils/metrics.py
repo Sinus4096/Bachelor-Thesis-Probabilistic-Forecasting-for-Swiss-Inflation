@@ -59,3 +59,14 @@ def calculate_crps(y_true, params):
     res_left,_= quad(integrand_left, lower_lim, y_true)
     res_right,_= quad(integrand_right, y_true, upper_lim)
     return res_left+res_right
+
+
+
+
+#3.RMSE to compare their point forecast accuracy
+#-----------------------------
+def calculate_rmse(actual, predicted_median):
+    """
+    calc squared error of single observation, for mean part-> aggregate results later"""
+    Sq_error=(actual - predicted_median)**2
+    return Sq_error

@@ -15,7 +15,7 @@ current_dir=Path(__file__).resolve().parent
 project_root= current_dir.parent.parent
 sys.path.append(str(project_root))
 #import needed utils
-from Utils.metrics import qrf_crps_scorer, calculate_crps
+from Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse
 from Utils.density_fitting import fit_skew_t
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -177,7 +177,8 @@ def run_experiment(config):
                         #combine
                         preds_dense_yoy=base_effect +pred_dense_h_step
                         preds_plot_yoy= base_effect+pred_plot_h_step
-
+                     #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
+                     sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
                      #flatten to 1D array to fit skew-t distribution later
                      y_fit_data=preds_dense_yoy.flatten()
                      skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
@@ -190,7 +191,7 @@ def run_experiment(config):
                      empirical_crps= qrf_crps_scorer([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
-                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
+                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
                              'Skewt_df': skew_params[0], 'Skewt_nc': skew_params[1], 'Skewt_loc': skew_params[2], 'Skewt_scale': skew_params[3], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
