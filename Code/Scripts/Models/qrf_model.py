@@ -36,9 +36,12 @@ def run_experiment(config):
     #want to know which one (default or tuning)
     print(f"run {config['experiment_name']}")
     #load data_stationary and data_yoy
-    path='Code/Data/Cleaned_Data/data_stationary.csv'
-    df=pd.read_csv(path, index_col='Date', parse_dates=True)
-    df_yoy=pd.read_csv('Code/Data/Cleaned_Data/data_yoy.csv', index_col='Date', parse_dates=True)
+    # Create a robust path to your data
+    project_root=current_dir.parent.parent
+    data_path =project_root /"Data"/ "Cleaned_Data"/"data_stationary.csv"
+    df =pd.read_csv(data_path, index_col='Date', parse_dates=True)
+    data_yoy_path=project_root/ "Data"/ "Cleaned_Data"/"data_yoy.csv"
+    df_yoy=pd.read_csv(data_yoy_path, index_col='Date', parse_dates=True)
 
     #get target variables and forecast horizon from the config file
     targets=config['data']['targets']

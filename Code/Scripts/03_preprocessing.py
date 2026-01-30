@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-
+#preprocessing done according to 02_eda_raw.py
 
 #import data
 path ='Code/Data/Cleaned_Data/data_merged.csv'
@@ -14,7 +14,7 @@ horizons=[3, 6, 9, 12]
 #-------------------------------------------
 #initialize a DF
 df_stationary=pd.DataFrame(index=df.index)
-#1. use formulat 12/h) * [ln(P_t) - ln(P_{t-h})] * 100 on CPI-variables e.g. for h=12: 12-month YoY growth rate
+#1. use formulat 12/h)*[ln(P_t)-ln(P_{t-h})]*100 on CPI-variables e.g. for h=12: 12-month YoY growth rate
 for h in horizons:
     df_stationary[f'target_headline_{h}m'] =(12/h)*(np.log(df['Headline_CPI']).diff(h))* 100
     df_stationary[f'target_core_{h}m']=(12/h) *(np.log(df['Core_CPI']).diff(h))*100
@@ -33,19 +33,13 @@ for var in remaining_vars:
 #check
 print(df_stationary.head())
 
-#through differencing first year have no data for core and headline cpi anymore (-> which is why we didnt drop the inflation expectations
-#during data ingestion)-> set new starting date at one year later:
-start_date ='2001-05-01'
-#end so have the latest months
-df_stationary=df_stationary.loc[start_date:] 
-
-#check again
-df_stationary.head()
-#look if no NA's anymore:
+#look if no NA's:
 nans_per_column =df_stationary.isna().sum()
 print(nans_per_column)
 
-#-> yes no NA's
+#through differencing for h=12, will have NA till may 2001 in beginning but will shift-> will ignore 
+#NA of inflation expectations will be dropped later as we'll have other NA's when creating lags
+#->looks good for now
 
 #---------------------------
 #add lags
@@ -59,14 +53,14 @@ df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags
 for i in [1, 2]:
-    df_stationary[f'headline_lag_{i}'] = df_stationary['headline_1m'].shift(i)
-    df_stationary[f'core_lag_{i}'] = df_stationary['core_1m'].shift(i)
+    df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
+    df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
 
 
 
 #--------------------------
-#add Monthly Cycle features: sine/consine transformations or Dummies?
+#add Monthly Cycle features: sine/consine transformations
 #--------------------------------
 #are better than adding monthly dummies for bvar model as they do not eat up so many degrees of freedom
 period = 12
@@ -84,12 +78,30 @@ print(df_stationary.head())
 #----------------------------------------
 #reason: need data of today to predict three months ahead-> features at t align with the target realized at t+h
 for h in horizons:
-    df_stationary[f'target_headline_{h}m'] = df_stationary[f'target_headline_{h}m'].shift(-h)
-    df_stationary[f'target_core_{h}m'] = df_stationary[f'target_core_{h}m'].shift(-h)
+    df_stationary[f'target_headline_{h}m']= df_stationary[f'target_headline_{h}m'].shift(-h)
+    df_stationary[f'target_core_{h}m']= df_stationary[f'target_core_{h}m'].shift(-h)
 #see if worked:
 print(df_stationary.tail())
-#do not drop NA's here: need the bottom rows later to predict the "future"
 
+
+#-----------------------------
+#cope with NA's
+#-----------------------------
+#chekc for NA's
+nans_per_column_yoy =df_stationary.isna().sum()
+print(nans_per_column_yoy)
+#NA of lags because cannot make lags of data that not exist-> check if somewhere else:
+rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
+print(rows_with_nan)
+#->NA lags are as expected in the first two rows-> set start date later to avoid crash of qrf
+#do not drop NA's of targets later here: their availability depends on the forecast horizon
+#as will evaluate using yoy inflation dropping later won't make a change
+start_date=df_stationary['infl_e_current_year'].first_valid_index()
+df_stationary= df_stationary.loc[start_date:] 
+#recheck
+rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
+print(rows_with_nan)
+#good: only ones left with missing targets
 
 
 
