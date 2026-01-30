@@ -36,7 +36,7 @@ def qrf_crps_scorer(estimator, X, y):
 
 #2.crps for all models to compare and evaluate their  distribution
 #-----------------------------
-#def calculate_crps(y_true, params):
+def calculate_crps(y_true, params):
     """ cacl crps for a skew-t distribution against actual value"""
     #unpack params
     df, nc, loc, scale=params
@@ -61,41 +61,6 @@ def qrf_crps_scorer(estimator, X, y):
     res_right,_= quad(integrand_right, y_true, upper_lim)
     return res_left+res_right
 
-
-def calculate_crps(y_true, params):
-    """ calc crps for a skew-normal distribution against actual value"""
-    
-    # 1. Unpack params: Skew-normal has 3 parameters (shape 'a', loc, scale)
-    # Note: 'a' corresponds to the skewness parameter
-    a, loc, scale = params
-    
-    # 2. Handle NAN if fitting failed
-    if np.isnan(a):
-        return np.nan
-        
-    # 3. Set integration limits
-    # Change nct.ppf to skewnorm.ppf
-    lower_lim = skewnorm.ppf(1e-6, a, loc=loc, scale=scale)
-    upper_lim = skewnorm.ppf(1 - 1e-6, a, loc=loc, scale=scale)
-    
-    # Quickly ensure that bounds cover y_true
-    lower_lim = min(lower_lim, y_true - 10 * scale)
-    upper_lim = max(upper_lim, y_true + 10 * scale)
-    
-    # 4. Define integrands using skewnorm.cdf
-    def integrand_left(z):
-        """integral from lower_bound to y_true"""
-        return skewnorm.cdf(z, a, loc=loc, scale=scale)**2
-        
-    def integrand_right(z):
-        """integral from y_true to upper_bound"""
-        return (1.0 - skewnorm.cdf(z, a, loc=loc, scale=scale))**2
-    
-    # 5. Perform integration -> calc crps (No changes needed here)
-    res_left, _ = quad(integrand_left, lower_lim, y_true)
-    res_right, _ = quad(integrand_right, y_true, upper_lim)
-    
-    return res_left + res_right
 
 
 

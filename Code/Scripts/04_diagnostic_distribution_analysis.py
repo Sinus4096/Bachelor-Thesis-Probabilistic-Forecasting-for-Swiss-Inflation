@@ -11,8 +11,8 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 #select only the two target variables in yoy not levels
 variables=['Headline', 'Core']
 #split the data based to avoid look-ahead bias
-train_df= df[:'2015-12-31']
-test_df= df['2016-01-01':]
+train_df= df[:'2014-12-31']
+
 #define the distributions to compare
 dist_names =['nct', 'skewnorm', 'johnsonsu', 'norm']
 #intialize results storage
@@ -26,8 +26,7 @@ for var in variables:
         #get distribution object
         dist= getattr(stats, name)
         #fit dist to data
-        params= dist.fit(data)
-            
+        params= dist.fit(data)            
         #calc goodness of fit metrics
         log_lik= np.sum(dist.logpdf(data, *params))  #log-likelihood
         d_stat, p_val= stats.kstest(data, name, args=params)  #Kolmogorov-Smirnov test
@@ -41,7 +40,8 @@ for var in variables:
     print(f"\nBest Distributions for {var}:")
     print(results_df[results_df['Variable'] == var].sort_values('Log-Likelihood', ascending=False))
 
-#-> skew normal and johnsonsu fit better than skew-t for both variables: will take skew normal for simplicity
+#-> skew-t fits best on training data (for Core 1. and for headline 2. best)
+#why not Johnsonsu?skew-t is often more robust in economic forecasting than the Johnson SU.
 
 #visualize with qq-plots
 #----------------------------
