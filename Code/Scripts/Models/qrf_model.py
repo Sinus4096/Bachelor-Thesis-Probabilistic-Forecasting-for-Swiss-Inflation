@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 import sys
 import pandas as pd
-from pyparsing import Path
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
@@ -12,11 +11,13 @@ from scipy.stats import nct
 #get path for utils
 current_dir=Path(__file__).resolve().parent
 #get project root
-project_root= current_dir.parent.parent
-sys.path.append(str(project_root))
+scripts_root = current_dir.parent.parent   
+sys.path.insert(0, str(scripts_root))
+
 #import needed utils
-from Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse
-from Utils.density_fitting import fit_skew_t
+from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse
+from Scripts.Utils.density_fitting import fit_skew_t
+
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
 def load_config(config_path):

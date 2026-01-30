@@ -1,7 +1,16 @@
+import os
 import sys
-import argparse
-import yaml
+from pathlib import Path
 #run experiments
+from Code.Scripts.Models.qrf_model import run_experiment
+# 1. FORCE the project root into Python's search path IMMEDIATELY
+project_root = str(Path(__file__).resolve().parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# 2. NOW you can import your custom code safely
+import yaml
+import argparse
 from Code.Scripts.Models.qrf_model import run_experiment
 
 def load_config(config_path):

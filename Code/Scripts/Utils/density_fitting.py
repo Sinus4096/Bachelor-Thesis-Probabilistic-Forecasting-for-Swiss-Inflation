@@ -1,8 +1,6 @@
 import numpy as np
-import pandas as pd
 from scipy.stats import nct
 from scipy.optimize import least_squares
-from scipy.integrate import quad
 
 #helper fct to fit skew-t parameters -> can compare the models
 
