@@ -15,6 +15,7 @@ data:
 model:
   tune_hyperparameters: false    #use the default model
   use_residual_forecasting: true   #run the model on residuals using ridge
+  density_method: "skew-t"
   params:
     n_estimators: 500    #nr. of decision trees used: ECB used 500
     min_samples_leaf: 10    #meinshausen and ECB proposed 10 by default

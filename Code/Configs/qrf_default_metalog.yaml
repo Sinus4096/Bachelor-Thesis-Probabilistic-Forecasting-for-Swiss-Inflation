@@ -1,5 +1,4 @@
-#same as default but try with kde instead of skew-t
-# config_qrf_kde.yaml
+#same as default but try with metalog instead of skew-t
 experiment_name: "QRF_KDE_Default"
 model_type: "qrf"
 
@@ -12,7 +11,8 @@ data:
 
 model:
   tune_hyperparameters: false
-  density_method: "kde"  
+  use_residual_forecasting: false
+  density_method: "metalog"  #instead of skew-t
   params:
     n_estimators: 500
     min_samples_leaf: 10

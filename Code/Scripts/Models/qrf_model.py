@@ -8,6 +8,7 @@ from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from scipy.stats import nct
+from pymetalog import metalog
 from sklearn.linear_model import Ridge
 #get path for utils
 current_dir=Path(__file__).resolve().parent
@@ -16,8 +17,8 @@ scripts_root = current_dir.parent.parent
 sys.path.insert(0, str(scripts_root))
 
 #import needed utils
-from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
-from Scripts.Utils.density_fitting import fit_skew_t
+from Scripts.Utils.metrics import calculate_crps_metalog, qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
+from Scripts.Utils.density_fitting import fit_metalog, fit_skew_t
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -209,20 +210,48 @@ def run_experiment(config):
                         preds_plot_yoy= base_effect+pred_plot_h_step
                      #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
                      sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
-                     #flatten to 1D array to fit skew-t distribution later
+                     #flatten to 1D array to fit distribution later
                      y_fit_data=preds_dense_yoy.flatten()
-                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+                     #get which density to use
+                     density_method=config['model'].get('density_method', 'skew-t')
 
-                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
-                     pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                     #calc step-specific CRPS
-                     parametric_crps=calculate_crps(actual_val, skew_params)
-                     #want to calc empirical crpsto see how much smoothing the skew-t fit changed the result
+
+                     if density_method=='metalog':
+                         # 5 to 7 terms is usually the "sweet spot" for capturing bimodality
+                         # without overfitting noise in the quantiles.
+                         n_terms = config['model'].get('metalog_terms', 5)
+    
+                         # Fit Metalog
+                         # y_fit_data: the predicted quantiles from the forest
+                         # quantile_levels: the probabilities associated with those quantiles
+                         metalog_model = fit_metalog(y_fit_data, eval_quantiles, term_limit=n_terms)
+    
+                         # Calculate PIT: CDF of actual value under Metalog
+                         # we use the highest term specified in n_terms
+                         pit_val = metalog.pmetalog(metalog_model, q=[actual_val], term=n_terms)[0]
+    
+                         # Calculate step-specific CRPS
+                         parametric_crps = calculate_crps_metalog(actual_val, metalog_model, term=n_terms)
+    
+                         # Store params: Metalog doesn't have loc/scale in the t-dist sense, 
+                         # but we store mean/std for consistency
+                         dist_params = {'df': float(n_terms), 'nc': np.nan, 'loc': np.mean(y_fit_data), 'scale': np.std(y_fit_data)}
+                    #else fit skew-t
+                     else:
+                         skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+                         
+                         #calc PIT (for plotting later): cdf of actual value under fitted skew-t
+                         pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                         #calc step-specific CRPS for skew-t
+                         parametric_crps=calculate_crps(actual_val, skew_params)
+                         #get params for plotting later
+                         dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
+                     #want to calc empirical crpsto see how much smoothing the skew-t or KDE fit changed the result
                      empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
                              'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                             'Skewt_df': skew_params[0], 'Skewt_nc': skew_params[1], 'Skewt_loc': skew_params[2], 'Skewt_scale': skew_params[3], 'PIT': pit_val}
+                             'Dist_Param_1': dist_params['df'], 'Dist_Param_2': dist_params['nc'], 'Dist_Param_3': dist_params['loc'], 'Dist_Param_4': dist_params['scale'], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter
@@ -231,7 +260,7 @@ def run_experiment(config):
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/Data_experiments/{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments_qrf/{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 

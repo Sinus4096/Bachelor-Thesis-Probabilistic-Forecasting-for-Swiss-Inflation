@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import nct
 from scipy.integrate import quad
-from scipy.stats import skewnorm
+from pymetalog import metalog
 
 #approximation of crps for hyperparameter tuning in qrf-> evaluation of quantile predictions
 #-----------------------------
@@ -64,7 +64,31 @@ def calculate_crps(y_true, params):
 
 
 
+def calculate_crps_metalog(y_true, metalog_model, term=5):
+    """
+    Calculates CRPS for Metalog using numerical integration.
+    """
+    from scipy.integrate import quad
+    
+    # Define integration limits based on the quantile range + a buffer
+    q_min = np.min(metalog_model['params']['x'])
+    q_max = np.max(metalog_model['params']['x'])
+    buffer = (q_max - q_min) * 0.5
+    lower_lim = q_min - buffer
+    upper_lim = q_max + buffer
 
+    def integrand(x):
+        # Get CDF at value x
+        cdf_x = metalog.pmetalog(metalog_model, q=[x], term=term)[0]
+        # Handle edge cases where metalog might return NaN outside bounds
+        if np.isnan(cdf_x): 
+            cdf_x = 0.0 if x < q_min else 1.0
+            
+        heaviside = 1.0 if x >= y_true else 0.0
+        return (cdf_x - heaviside)**2
+
+    crps_val, _ = quad(integrand, lower_lim, upper_lim, limit=100)
+    return crps_val
 
 #3.RMSE to compare their point forecast accuracy
 #-----------------------------

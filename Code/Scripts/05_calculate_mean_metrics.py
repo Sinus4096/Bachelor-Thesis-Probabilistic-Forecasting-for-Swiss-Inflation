@@ -3,7 +3,7 @@ import glob
 import os
 
 # Define the paths to your results folders
-folders = ['Results/Data_experiments', 'Results/Data_experiments2']
+folders = ['Results/Data_experiments_qrf', 'Results/Data_experiments2_bvar']
 all_results = []
 
 for folder in folders:

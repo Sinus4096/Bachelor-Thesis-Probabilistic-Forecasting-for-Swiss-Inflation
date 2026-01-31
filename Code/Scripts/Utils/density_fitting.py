@@ -2,7 +2,7 @@ import numpy as np
 from scipy.stats import nct
 from scipy.optimize import least_squares
 from scipy.optimize import least_squares
-from scipy.stats import gaussian_kde
+from pymetalog import metalog
 
 #helper fct to fit skew-normal parameters -> can compare the models
 #see script 04_diagnostic_distribution_analysis.py for why not fitting other distributions and comparison
@@ -28,10 +28,16 @@ def fit_skew_t(quantiles_yoy, quantile_levels):
 
 
 
-def fit_kde(quantiles_yoy):
-    """fit KDE to predicted quantiles to try to have better fit than skew-t
+def fit_metalog(quantiles, probs, term_limit=5):
     """
-    #fit KDE using scipy
-    kde= gaussian_kde(quantiles_yoy, bw_method='scott')
-    return kde
+    Fits a Metalog distribution to the forest quantiles.
+    'u' stands for unbounded, which is appropriate for inflation YoY.
+    """
+    # Ensure quantiles are sorted and unique (Metalog requirement)
+    # Sometimes forests produce identical quantiles in the tails
+    unique_q, indices = np.unique(quantiles, return_index=True)
+    unique_p = np.array(probs)[indices]
+    
+    m = metalog.metalog(x=unique_q, probs=unique_p, term_limit=term_limit, boundedness='u')
+    return m
 
