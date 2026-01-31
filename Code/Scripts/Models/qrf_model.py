@@ -144,13 +144,13 @@ def run_experiment(config):
                 #if configured to use residual forecasting
                 if use_residuals:
                     #fit ridge regression to get residuals
-                    ridge_model= Ridge(alpha=1.0)
-                    ridge_model.fit(X_train, Y_train)
+                    ridge_baseline= Ridge(alpha=1.0) 
+                    ridge_baseline.fit(X_train, Y_train)
                     #get residuals for qrf training
-                    train_linear_preds=linear_model.predict(X_train)  #predict with linear model
+                    train_linear_preds=ridge_baseline.predict(X_train)  #predict with linear model
                     Y_train_effective= Y_train-train_linear_preds                    
                     #get linear forecast for test set
-                    test_linear_preds= linear_model.predict(X_test)
+                    test_linear_preds= ridge_baseline.predict(X_test)
                 
                 else: #normal qrf forecasting
                     Y_train_effective= Y_train

@@ -22,7 +22,9 @@ for folder in folders:
             'Mean_Empirical_CRPS': df['Empirical_CRPS'].mean(),
             'Mean_Parametric_CRPS': df['Parametric_CRPS'].mean(),
             'Mean_Squared_Error': df['Squared_Error'].mean(),
-            'RMSE': (df['Squared_Error'].mean())**0.5 # Paper uses RMSE for point forecasts [cite: 380]
+            'RMSE': (df['Squared_Error'].mean())**0.5,
+            'PIT_Mean': df['PIT'].mean(),
+            'PIT_Std': df['PIT'].std()
         }
         all_results.append(metrics)
 
