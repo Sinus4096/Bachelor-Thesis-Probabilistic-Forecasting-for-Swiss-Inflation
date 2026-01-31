@@ -7,6 +7,7 @@ from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
 from statsmodels.tsa.stattools import adfuller
 import math
+from statsmodels.tsa.ar_model import AutoReg
 
 
 
@@ -179,7 +180,8 @@ print(df_summary.to_string(index=False))
 
 
 
-
+#from now on to prevent data leakage, only use data from 2015 onwards (training data)
+df= df.loc[:'2014-12-31']
 
 #---------------------------------------
 #Check For Correlation
@@ -459,7 +461,7 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     # Create fig. squeeze=False ensures 'axes' is ALWAYS a 2D array [row, col]
     fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
     
-    #loop through vars in chunk
+    #loop through vars in chunk for acf/pacf plots
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df_growth[var_name].dropna()
@@ -482,8 +484,53 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     #plot
     plt.tight_layout()
     plt.show()
-    #add 1 to chunknr for next chunk plot
     chunk_nr+=1
+
+#see whether lags after lag 2 in pacf plot are from seasonality rather than trend-> difference (won't do to preprocess but needed
+#to determine how many lags to include in models):
+for h in horizons:
+    df_growth[f'target_headline_{h}m_diff'] =df_growth[f'target_headline_{h}m'].diff(12)
+    df_growth[f'target_core_{h}m_diff'] =df_growth[f'target_core_{h}m'].diff(12)
+variables_to_plot= [f'target_headline_{h}m_diff' for h in horizons]+[f'target_core_{h}m_diff' for h in horizons]
+#plot acf/pacf
+for start_idx in range(0, len(variables_to_plot), vars_per_fig):
+    
+    #def current chunk
+    chunk =variables_to_plot[start_idx: start_idx+vars_per_fig]
+    n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
+    
+    # Create fig. squeeze=False ensures 'axes' is ALWAYS a 2D array [row, col]
+    fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
+    
+    #loop through vars in chunk for acf/pacf plots
+    for i, var_name in enumerate(chunk):
+        #get data and drop NA's (before 2001)
+        series=df_growth[var_name].dropna()
+        
+        #acf plot
+        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #pacf plot
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        
+        #styling
+        for ax in axes[i]:
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+            ax.set_ylim(-1.1, 1.1)
+            ax.tick_params(axis='both', which='major', labelsize=10)
+    #figure title for all chunks
+    fig.suptitle(f'ACF & PACF Plots of Annualized Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
+    #plot
+    plt.tight_layout()
+    plt.show()
+    chunk_nr+=1
+#acf:data still has long-term cyclicality (eg business cycles)
+#pacf 3m: lag at 4, 12m lat at 12 still significant, probably due to how annualized rates are calculated
+#for 6m and 9m only lags also around 10 still significant
+#decision: will not remove them as fixing them will cause the model to rather overfit to the window's construction rather 
+#than the economy.
 #still see high persistence especially when h increases, still choose this approach: see thesis chapter 3.1
 
 #do adf test

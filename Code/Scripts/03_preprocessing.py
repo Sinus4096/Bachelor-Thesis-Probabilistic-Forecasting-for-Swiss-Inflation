@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-#preprocessing done according to 02_eda_raw.py
+#preprocessing done according to 02_eda_raw.py (findings are based on training data but applied to whole data to prevent look-ahead bias)
 
 #import data
 path ='Code/Data/Cleaned_Data/data_merged.csv'
@@ -63,7 +63,7 @@ for i in [1, 2]:
 #add Cycle features: sine/consine transformations
 #--------------------------------
 #are better than adding monthly dummies for bvar model as they do not eat up so many degrees of freedom
-period = 12
+period= 12
 #get the month index (1-12)
 month_idx=df_stationary.index.month
 
