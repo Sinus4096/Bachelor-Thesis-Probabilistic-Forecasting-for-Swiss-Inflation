@@ -8,7 +8,7 @@ from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from scipy.stats import nct
-from pymetalog import metalog
+import pymetalog as pm
 from sklearn.linear_model import Ridge
 #get path for utils
 current_dir=Path(__file__).resolve().parent
@@ -228,7 +228,7 @@ def run_experiment(config):
     
                          # Calculate PIT: CDF of actual value under Metalog
                          # we use the highest term specified in n_terms
-                         pit_val = metalog.pmetalog(metalog_model, q=[actual_val], term=n_terms)[0]
+                         pit_val = pm.pmetalog(metalog_model, q=[float(actual_val)], term=n_terms)[0]
     
                          # Calculate step-specific CRPS
                          parametric_crps = calculate_crps_metalog(actual_val, metalog_model, term=n_terms)

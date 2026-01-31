@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import nct
 from scipy.integrate import quad
-from pymetalog import metalog
+import pymetalog as pm
 
 #approximation of crps for hyperparameter tuning in qrf-> evaluation of quantile predictions
 #-----------------------------
@@ -79,7 +79,7 @@ def calculate_crps_metalog(y_true, metalog_model, term=5):
 
     def integrand(x):
         # Get CDF at value x
-        cdf_x = metalog.pmetalog(metalog_model, q=[x], term=term)[0]
+        cdf_x = pm.pmetalog(metalog_model, q=[x], term=term)[0]
         # Handle edge cases where metalog might return NaN outside bounds
         if np.isnan(cdf_x): 
             cdf_x = 0.0 if x < q_min else 1.0

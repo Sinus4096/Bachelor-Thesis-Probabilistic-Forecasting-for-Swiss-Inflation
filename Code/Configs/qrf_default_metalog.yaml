@@ -1,5 +1,5 @@
 #same as default but try with metalog instead of skew-t
-experiment_name: "QRF_KDE_Default"
+experiment_name: "QRF_Metalog_Default"
 model_type: "qrf"
 
 data:

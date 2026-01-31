@@ -2,7 +2,7 @@ import numpy as np
 from scipy.stats import nct
 from scipy.optimize import least_squares
 from scipy.optimize import least_squares
-from pymetalog import metalog
+import pymetalog as pm
 
 #helper fct to fit skew-normal parameters -> can compare the models
 #see script 04_diagnostic_distribution_analysis.py for why not fitting other distributions and comparison
@@ -30,14 +30,19 @@ def fit_skew_t(quantiles_yoy, quantile_levels):
 
 def fit_metalog(quantiles, probs, term_limit=5):
     """
-    Fits a Metalog distribution to the forest quantiles.
-    'u' stands for unbounded, which is appropriate for inflation YoY.
+    Fits Metalog to QRF quantiles. 
+    Converts data to lists to avoid pymetalog's NumPy compatibility bugs.
     """
-    # Ensure quantiles are sorted and unique (Metalog requirement)
-    # Sometimes forests produce identical quantiles in the tails
-    unique_q, indices = np.unique(quantiles, return_index=True)
-    unique_p = np.array(probs)[indices]
+    # 1. Ensure quantiles are unique (Metalog requirement)
+    # We add a tiny bit of noise if they aren't, to keep the full distribution
+    if len(np.unique(quantiles)) < len(quantiles):
+        quantiles = quantiles + np.linspace(0, 1e-9, len(quantiles))
     
-    m = metalog.metalog(x=unique_q, probs=unique_p, term_limit=term_limit, boundedness='u')
+    # 2. CONVERT TO LISTS
+    # This bypasses the 'ValueError: truth value of an array...' inside the library
+    x_list = quantiles.tolist() if isinstance(quantiles, np.ndarray) else list(quantiles)
+    p_list = probs.tolist() if isinstance(probs, np.ndarray) else list(probs)
+    
+    # 3. Fit
+    m = pm.metalog(x=x_list, probs=p_list, term_limit=term_limit, boundedness='u')
     return m
-

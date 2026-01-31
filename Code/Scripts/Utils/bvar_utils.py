@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import stats, optimize, special
+
 #see thesis for formulas
 class BVAR:
     """
