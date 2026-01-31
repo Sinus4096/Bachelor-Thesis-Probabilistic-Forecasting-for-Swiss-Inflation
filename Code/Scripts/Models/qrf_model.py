@@ -1,14 +1,14 @@
-import os
 from pathlib import Path
 import sys
 import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
+from sklearn import linear_model
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from scipy.stats import nct
-from scipy.stats import skewnorm
+from sklearn.linear_model import Ridge
 #get path for utils
 current_dir=Path(__file__).resolve().parent
 #get project root
@@ -17,7 +17,7 @@ sys.path.insert(0, str(scripts_root))
 
 #import needed utils
 from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
-from Scripts.Utils.density_fitting import fit_skew_normal
+from Scripts.Utils.density_fitting import fit_skew_t
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -50,6 +50,9 @@ def run_experiment(config):
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     step_months=config['data']['retrain_step_months']
+
+    #for residual forecastin (in config file need residuals)
+    use_residuals = config['model'].get('use_residual_forecasting', False)
 
     #iterate through all targets 
     for target_name in targets:
@@ -138,21 +141,40 @@ def run_experiment(config):
                 X_train= X_train.loc[Y_train.index]
 
 
+                #if configured to use residual forecasting
+                if use_residuals:
+                    #fit ridge regression to get residuals
+                    ridge_model= Ridge(alpha=1.0)
+                    ridge_model.fit(X_train, Y_train)
+                    #get residuals for qrf training
+                    train_linear_preds=linear_model.predict(X_train)  #predict with linear model
+                    Y_train_effective= Y_train-train_linear_preds                    
+                    #get linear forecast for test set
+                    test_linear_preds= linear_model.predict(X_test)
+                
+                else: #normal qrf forecasting
+                    Y_train_effective= Y_train
+                    test_linear_preds=np.zeros(len(X_test))  #no linear effect to add later
+
+
                 #use final params determined by which model use
                 model_args=final_params.copy()
                 #ensure reproducibility
                 model_args['random_state']=42
-
                 #train model
                 model= RandomForestQuantileRegressor(**model_args)
-                model.fit(X_train, Y_train)
+                model.fit(X_train, Y_train_effective)
                 #predict key quantiles for evaluation and plotting
                 plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
                 preds_plot=model.predict(X_test, quantiles=list(plot_quantiles))    #pre safe the predictions
-                
+                #get linear additve part if residual forecasting
+                linear_add = test_linear_preds.reshape(-1, 1)
                 #predict dense grid for CRPS and fan charts
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
+                #add linear part if residual forecasting
+                preds_plot+= linear_add
+                preds_dense+= linear_add
                 #store the resultes nicer in predefined list
                 for idx, date_idx in enumerate(test_indices):
                      #get date/origin of forecast
@@ -187,20 +209,20 @@ def run_experiment(config):
                         preds_plot_yoy= base_effect+pred_plot_h_step
                      #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
                      sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
-                     #flatten to 1D array to fit skew-normal distribution later
+                     #flatten to 1D array to fit skew-t distribution later
                      y_fit_data=preds_dense_yoy.flatten()
-                     skew_params=fit_skew_normal(y_fit_data, eval_quantiles)  #fit skew-normal, get params by the 99 points
+                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
 
-                     #calc PIT (for plotting later): cdf of actual value under fitted skew-normal
-                     pit_val= skewnorm.cdf(actual_val, skew_params[0], loc=skew_params[1], scale=skew_params[2])
+                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
+                     pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
                      #calc step-specific CRPS
                      parametric_crps=calculate_crps(actual_val, skew_params)
-                     #want to calc empirical crpsto see how much smoothing the skew-normal fit changed the result
+                     #want to calc empirical crpsto see how much smoothing the skew-t fit changed the result
                      empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
                              'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                             'Skewnorm_shape': skew_params[0], 'Skewnorm_loc': skew_params[1], 'Skewnorm_scale': skew_params[2], 'PIT': pit_val}
+                             'Skewt_df': skew_params[0], 'Skewt_nc': skew_params[1], 'Skewt_loc': skew_params[2], 'Skewt_scale': skew_params[3], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter
@@ -209,7 +231,7 @@ def run_experiment(config):
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/Data_experiments2/{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments/{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 

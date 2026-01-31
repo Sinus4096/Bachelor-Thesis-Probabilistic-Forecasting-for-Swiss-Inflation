@@ -30,8 +30,6 @@ for folder in folders:
 summary_df = pd.DataFrame(all_results)
 
 # Sort for better scannability (Headline vs Core and Horizons)
-summary_df = summary_df.sort_values(by=['Folder', 'File'])
+summary_df = summary_df
 print(summary_df.to_string(index=False))
 
-# Optional: Save to a master results file
-summary_df.to_csv('Results/Final_Model_Comparison.csv', index=False)

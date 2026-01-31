@@ -1,0 +1,21 @@
+#same as default but try with kde instead of skew-t
+# config_qrf_kde.yaml
+experiment_name: "QRF_KDE_Default"
+model_type: "qrf"
+
+data:
+  targets: ["Headline", "Core"]
+  horizons: [3, 6, 9, 12]
+  evaluation_scheme: "expanding_window"
+  eval_start_date: "2015-01-01"
+  retrain_step_months: 3
+
+model:
+  tune_hyperparameters: false
+  density_method: "kde"  
+  params:
+    n_estimators: 500
+    min_samples_leaf: 10
+    max_features: 0.33
+    n_jobs: -1
+    random_state: 42

@@ -18,6 +18,7 @@ df_stationary=pd.DataFrame(index=df.index)
 for h in horizons:
     df_stationary[f'target_headline_{h}m'] =(12/h)*(np.log(df['Headline_CPI']).diff(h))* 100
     df_stationary[f'target_core_{h}m']=(12/h) *(np.log(df['Core_CPI']).diff(h))*100
+
 #2. take log % growth 
 vars_to_log_diff = ['gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans', 
                     'Exchange_Rate_CHF'] 
@@ -52,7 +53,7 @@ print(nans_per_column)
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
-for i in [1, 2]:
+for i in [1, 2, 12]:
     df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
     df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
@@ -84,6 +85,14 @@ for h in horizons:
 print(df_stationary.tail())
 
 
+
+
+#--------------------------------------
+#add time index
+#----------------------------
+#helpful to capture time trend and structural breaks in models like BVAR
+df_stationary['time_index']= np.arange(len(df_stationary))
+
 #-----------------------------
 #cope with NA's
 #-----------------------------
@@ -96,7 +105,7 @@ print(rows_with_nan)
 #->NA lags are as expected in the first two rows-> set start date later to avoid crash of qrf
 #do not drop NA's of targets later here: their availability depends on the forecast horizon
 #as will evaluate using yoy inflation dropping later won't make a change
-start_date=df_stationary['infl_e_current_year'].first_valid_index()
+start_date=df_stationary['headline_lag_12'].first_valid_index()
 df_stationary= df_stationary.loc[start_date:] 
 #recheck
 rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
@@ -126,6 +135,9 @@ df_yoy=df_yoy.loc[start_date:]
 #check for NA's
 nans_per_column_yoy =df_yoy.isna().sum()
 print(nans_per_column_yoy)
+
+
+
 
 #--------------------------------------
 #save the DF's

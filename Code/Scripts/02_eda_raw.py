@@ -521,7 +521,7 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
             ax.set_ylim(-1.1, 1.1)
             ax.tick_params(axis='both', which='major', labelsize=10)
     #figure title for all chunks
-    fig.suptitle(f'ACF & PACF Plots of Annualized Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
+    fig.suptitle(f'ACF & PACF Plots of Annualized and Differenced Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
     plt.show()
