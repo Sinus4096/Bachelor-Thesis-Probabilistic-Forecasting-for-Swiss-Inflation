@@ -3,12 +3,11 @@ import sys
 import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
-from sklearn import linear_model
+
 from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 import yaml
 import argparse
 from scipy.stats import nct
-import pymetalog as pm
 from sklearn.linear_model import Ridge
 #get path for utils
 current_dir=Path(__file__).resolve().parent
@@ -17,8 +16,8 @@ scripts_root = current_dir.parent.parent
 sys.path.insert(0, str(scripts_root))
 
 #import needed utils
-from Scripts.Utils.metrics import calculate_crps_metalog, qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
-from Scripts.Utils.density_fitting import fit_metalog, fit_skew_t
+from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
+from Scripts.Utils.density_fitting import fit_skew_t
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -37,10 +36,12 @@ def load_config(config_path):
 def run_experiment(config):
     #want to know which one (default or tuning)
     print(f"run {config['experiment_name']}")
-    #load data_stationary and data_yoy
-    # Create a robust path to your data
+    #get which data to use from config file
+    data_filename=config['data'].get('data_file', 'data_stationary.csv')
+    #load data
     project_root=current_dir.parent.parent
-    data_path =project_root /"Data"/ "Cleaned_Data"/"data_stationary.csv"
+    #get path to selected data
+    data_path =project_root /"Data"/ "Cleaned_Data"/data_filename
     df =pd.read_csv(data_path, index_col='Date', parse_dates=True)
     data_yoy_path=project_root/ "Data"/ "Cleaned_Data"/"data_yoy.csv"
     df_yoy=pd.read_csv(data_yoy_path, index_col='Date', parse_dates=True)
@@ -54,7 +55,8 @@ def run_experiment(config):
 
     #for residual forecastin (in config file need residuals)
     use_residuals = config['model'].get('use_residual_forecasting', False)
-
+    #get forecast method from config file
+    forecast_method = config['model'].get('forecast_method', 'reconstruct')
     #iterate through all targets 
     for target_name in targets:
         #iterate through all horizons defined in script 03
@@ -119,7 +121,7 @@ def run_experiment(config):
             current_idx= start_idx
             while current_idx <total_rows:
                 #define the windows:
-                next_step_idx= min(current_idx+step_months, total_rows) #define the next quarter 
+                next_step_idx=min(current_idx+step_months, total_rows) #define the next quarter 
                 train_indices= range(0, current_idx)    #training set ranges from beginning up to the current index
                 test_indices = range(current_idx, next_step_idx)    #testin from current index up until next quarter
 
@@ -187,12 +189,11 @@ def run_experiment(config):
                          break 
                      #get actual value from df_yoy
                      actual_val= df_yoy.loc[target_date, yoy_col] 
-
-                     #reconstruct the forecasted YoY
-                     if h==12:
-                        #for 12m ahead, the qrf target is already yoy
-                        preds_dense_yoy= preds_dense[idx:idx+1]
-                        preds_plot_yoy= preds_plot[idx:idx+1]
+                     if forecast_method=='direct' or h==12:
+                         #direct forecast or 12m ahead: use qrf preds directly
+                         preds_dense_yoy= preds_dense[idx:idx+1]
+                         preds_plot_yoy= preds_plot[idx:idx+1]
+                     #else reconstruct the forecasted YoY                     
                      else: #if h<12, combine known histaory and model preds
                         months_back=12 - h  #need the change from t-(12-h) to t
                         history_date= forecast_date -pd.DateOffset(months=months_back)
@@ -212,46 +213,22 @@ def run_experiment(config):
                      sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
                      #flatten to 1D array to fit distribution later
                      y_fit_data=preds_dense_yoy.flatten()
-                     #get which density to use
-                     density_method=config['model'].get('density_method', 'skew-t')
+                     
 
-
-                     if density_method=='metalog':
-                         # 5 to 7 terms is usually the "sweet spot" for capturing bimodality
-                         # without overfitting noise in the quantiles.
-                         n_terms = config['model'].get('metalog_terms', 5)
-    
-                         # Fit Metalog
-                         # y_fit_data: the predicted quantiles from the forest
-                         # quantile_levels: the probabilities associated with those quantiles
-                         metalog_model = fit_metalog(y_fit_data, eval_quantiles, term_limit=n_terms)
-    
-                         # Calculate PIT: CDF of actual value under Metalog
-                         # we use the highest term specified in n_terms
-                         pit_val = pm.pmetalog(metalog_model, q=[float(actual_val)], term=n_terms)[0]
-    
-                         # Calculate step-specific CRPS
-                         parametric_crps = calculate_crps_metalog(actual_val, metalog_model, term=n_terms)
-    
-                         # Store params: Metalog doesn't have loc/scale in the t-dist sense, 
-                         # but we store mean/std for consistency
-                         dist_params = {'df': float(n_terms), 'nc': np.nan, 'loc': np.mean(y_fit_data), 'scale': np.std(y_fit_data)}
-                    #else fit skew-t
-                     else:
-                         skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
                          
-                         #calc PIT (for plotting later): cdf of actual value under fitted skew-t
-                         pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                         #calc step-specific CRPS for skew-t
-                         parametric_crps=calculate_crps(actual_val, skew_params)
-                         #get params for plotting later
-                         dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
+                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
+                     pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                     #calc step-specific CRPS for skew-t
+                     parametric_crps=calculate_crps(actual_val, skew_params)
+                     #get params for plotting later
+                     dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
                      #want to calc empirical crpsto see how much smoothing the skew-t or KDE fit changed the result
                      empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
                      #make dic of result
                      result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
                              'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                             'Dist_Param_1': dist_params['df'], 'Dist_Param_2': dist_params['nc'], 'Dist_Param_3': dist_params['loc'], 'Dist_Param_4': dist_params['scale'], 'PIT': pit_val}
+                             'df_skewt': dist_params['df'], 'nc_skewt': dist_params['nc'], 'loc_skewt': dist_params['loc'], 'scale_skewt': dist_params['scale'], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
                 #advance window 1quarter

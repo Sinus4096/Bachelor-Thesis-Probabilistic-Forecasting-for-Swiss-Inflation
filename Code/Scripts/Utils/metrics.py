@@ -21,7 +21,7 @@ def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):
         loss +=np.mean(np.maximum(qunat* errors, (qunat- 1)*errors))
     
     #devide by nr of quantiles -> approx integral across distrib.
-    return loss/len(quantiles)
+    return 2.0*(loss/len(quantiles))
 
 def qrf_crps_scorer(estimator, X, y):
     """
@@ -64,30 +64,41 @@ def calculate_crps(y_true, params):
 
 
 
-def calculate_crps_metalog(y_true, metalog_model, term=5):
+def calculate_crps_metalog(y_true, metalog_model, quantiles, term=5):
     """
-    Calculates CRPS for Metalog using numerical integration.
+    Calculates CRPS with error handling for pymetalog's numerical instability.
     """
     from scipy.integrate import quad
-    
-    # Define integration limits based on the quantile range + a buffer
-    q_min = np.min(metalog_model['params']['x'])
-    q_max = np.max(metalog_model['params']['x'])
-    buffer = (q_max - q_min) * 0.5
-    lower_lim = q_min - buffer
-    upper_lim = q_max + buffer
+    import numpy as np
+    import pymetalog as pm
+
+    # Use the predicted quantiles to define a tighter integration range
+    # Metalog is unstable in far tails; 20% buffer is safer than 50%
+    q_min, q_max = np.min(quantiles), np.max(quantiles)
+    spread = q_max - q_min
+    lower_lim = q_min - (spread * 0.2)
+    upper_lim = q_max + (spread * 0.2)
+    median_val = np.median(quantiles)
 
     def integrand(x):
-        # Get CDF at value x
-        cdf_x = pm.pmetalog(metalog_model, q=[x], term=term)[0]
-        # Handle edge cases where metalog might return NaN outside bounds
-        if np.isnan(cdf_x): 
-            cdf_x = 0.0 if x < q_min else 1.0
+        try:
+            # Attempt to get CDF from the library
+            res = pm.pmetalog(metalog_model, q=[float(x)], term=term)
+            
+            # If library returns empty list or NaN, fallback to step function
+            if res is None or len(res) == 0 or np.isnan(res[0]):
+                cdf_val = 0.0 if x < median_val else 1.0
+            else:
+                cdf_val = np.clip(float(res[0]), 0, 1)
+        except:
+            # Emergency fallback for numerical crashes
+            cdf_val = 0.0 if x < median_val else 1.0
             
         heaviside = 1.0 if x >= y_true else 0.0
-        return (cdf_x - heaviside)**2
+        return (cdf_val - heaviside)**2
 
-    crps_val, _ = quad(integrand, lower_lim, upper_lim, limit=100)
+    # Numerical integration with a tighter tolerance to speed up
+    crps_val, _ = quad(integrand, lower_lim, upper_lim, limit=50, epsabs=1e-4)
     return crps_val
 
 #3.RMSE to compare their point forecast accuracy
@@ -95,7 +106,7 @@ def calculate_crps_metalog(y_true, metalog_model, term=5):
 def calculate_rmse(actual, predicted_median):
     """
     calc squared error of single observation, for mean part-> aggregate results later"""
-    Sq_error=(actual - predicted_median)**2
+    Sq_error=(actual- predicted_median)**2
     return Sq_error
 
 

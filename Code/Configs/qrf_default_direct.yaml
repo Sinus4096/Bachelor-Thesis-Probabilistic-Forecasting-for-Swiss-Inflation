@@ -1,5 +1,5 @@
-#same as default but try with metalog instead of skew-t
-experiment_name: "QRF_Metalog_Default"
+#same as default but try different preprocessing
+experiment_name: "QRF_Direct_Default"
 model_type: "qrf"
 
 data:
@@ -8,11 +8,12 @@ data:
   evaluation_scheme: "expanding_window"
   eval_start_date: "2015-01-01"
   retrain_step_months: 3
+  data_file: "data_stationary_direct.csv"  #use 2. preprocessed data
 
 model:
   tune_hyperparameters: false
   use_residual_forecasting: false
-  density_method: "metalog"  #instead of skew-t
+  forecast_method: "direct" 
   params:
     n_estimators: 500
     min_samples_leaf: 10

@@ -85,6 +85,14 @@ for h in horizons:
 print(df_stationary.tail())
 
 
+#---------------------------
+#add inflation up to date: when predicting yoy-> helpful to know what happened last 9 months
+#---------------------------------
+#for h=3, we need the 9-month change. For h=6, the 6-month change.
+for h in [3, 6, 9]:
+    months_passed= 12-h
+    df_stationary[f'headline_passed_{h}m']=np.log(df['Headline_CPI']).diff(months_passed)*100
+    df_stationary[f'core_passed_{h}m']= np.log(df['Core_CPI']).diff(months_passed)* 100
 
 
 #--------------------------------------
@@ -111,6 +119,27 @@ df_stationary= df_stationary.loc[start_date:]
 rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
 print(rows_with_nan)
 #good: only ones left with missing targets
+
+
+
+#----------------------------------------
+#for 2. configuration of the stationary data: direct 12-month YoY growth rate prediction (no 12/h scaling)
+#-----------------------------------------------------------
+df_stationary2=df_stationary.copy()
+#drop previous targets
+target_cols_to_drop= [col for col in df_stationary2.columns if 'target_' in col]
+df_stationary2.drop(columns=target_cols_to_drop, inplace=True)
+
+#12 month yoy growth rates in %
+yoy_headline_raw=(np.log(df['Headline_CPI']).diff(12))*100
+yoy_core_raw= (np.log(df['Core_CPI']).diff(12))* 100
+
+#shift according to horizons
+for h in horizons:
+    df_stationary2[f'target_headline_{h}m'] = yoy_headline_raw.shift(-h)
+    df_stationary2[f'target_core_{h}m'] = yoy_core_raw.shift(-h)
+
+
 
 
 
@@ -150,3 +179,5 @@ output_file1=output_path/'data_stationary.csv'
 df_stationary.to_csv(output_file1, index=True)
 output_file2=output_path/'data_yoy.csv'
 df_yoy.to_csv(output_file2, index=True)
+output_file3= output_path/'data_stationary_direct.csv'
+df_stationary2.to_csv(output_file3, index=True)
