@@ -20,9 +20,12 @@ for h in horizons:
     df_stationary[f'target_core_{h}m']=(12/h) *(np.log(df['Core_CPI']).diff(h))*100
 
 #2. take log % growth 
-vars_to_log_diff = ['gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans', 
-                    'Exchange_Rate_CHF'] 
+vars_to_log_diff= ['PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans', 'Exchange_Rate_CHF'] 
 df_stationary[vars_to_log_diff] = np.log(df[vars_to_log_diff]).diff(1)*100
+#need to do quarterly for gdp indices as we forward filled them-> do 3-month diff
+gdp_vars=['gdp_index_ch', 'gdp_index_eu']
+df_stationary[gdp_vars]= np.log(df[gdp_vars]).diff(3)*100
+
 #3. add all other variables (which were already stationary or in a rate (wage change))
 #subtract the current columns from the original dataframe's columns
 already_processed=set(df_stationary.columns)  #all cols already in df_stationary
@@ -85,21 +88,6 @@ for h in horizons:
 print(df_stationary.tail())
 
 
-#---------------------------
-#add inflation up to date: when predicting yoy-> helpful to know what happened last 9 months
-#---------------------------------
-#for h=3, we need the 9-month change. For h=6, the 6-month change.
-for h in [3, 6, 9]:
-    months_passed= 12-h
-    df_stationary[f'headline_passed_{h}m']=np.log(df['Headline_CPI']).diff(months_passed)*100
-    df_stationary[f'core_passed_{h}m']= np.log(df['Core_CPI']).diff(months_passed)* 100
-
-
-#--------------------------------------
-#add time index
-#----------------------------
-#helpful to capture time trend and structural breaks in models like BVAR
-df_stationary['time_index']= np.arange(len(df_stationary))
 
 #-----------------------------
 #cope with NA's
@@ -121,6 +109,11 @@ print(rows_with_nan)
 #good: only ones left with missing targets
 
 
+#--------------------------------------
+#add time index
+#----------------------------
+#helpful to capture time trend and structural breaks in models like BVAR
+df_stationary['time_index']= np.arange(len(df_stationary))
 
 #----------------------------------------
 #for 2. configuration of the stationary data: direct 12-month YoY growth rate prediction (no 12/h scaling)

@@ -1,4 +1,3 @@
-from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -7,7 +6,7 @@ from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
 from statsmodels.tsa.stattools import adfuller
 import math
-from statsmodels.tsa.ar_model import AutoReg
+
 
 
 
@@ -386,10 +385,13 @@ print(adf_table)
 #---------------------------------
 #1. vars with strong trend:
 #trend is so dominant that it hides seasonal signa, once calculate the log-growth ratem, trend is removed-> hidden seasonal spikes will become visible.
-trending_vars=['Core_CPI', 'Headline_CPI', 'gdp_index_ch', 'gdp_index_eu', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans','Exchange_Rate_CHF']
-
+trending_vars=['Core_CPI', 'Headline_CPI', 'PPI', 'real_turnover', 'retail_turnover', 'Manufacturing_EU', 'Vol_loans','Exchange_Rate_CHF']
+#for gdp vars use quarterly diff to match the freq of the data
+gdp_vars=['gdp_index_ch', 'gdp_index_eu']
+growth_vars= trending_vars +gdp_vars
 #take log growth rates and not just differences to make it comparable to target variables
 df_growth=np.log(df[trending_vars]).diff().dropna()*100
+df_growth[gdp_vars]= np.log(df[gdp_vars]).diff(3).dropna()*100
 
 #start the plotting to see if there is seasonal pattern now:
 #set colors
@@ -400,10 +402,10 @@ vars_per_fig=4
 chunk_nr=1
 
 #loop through variables in chunks to plot acf/pacf
-for start_idx in range(0, len(trending_vars), vars_per_fig):
+for start_idx in range(0, len(growth_vars), vars_per_fig):
     
     #def current chunk
-    chunk=trending_vars[start_idx: start_idx+vars_per_fig]
+    chunk=growth_vars[start_idx: start_idx+vars_per_fig]
     n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
     
     #create figure 
@@ -432,7 +434,8 @@ for start_idx in range(0, len(trending_vars), vars_per_fig):
     plt.show()
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
-    
+#observations:
+#for gdps: look worse (slower decay in acf and ar(2) in pacf) than if do monthly diff but then would have 0's in dataset bc of forward filling-> keep quarterly diff
 #all look good except for core and headline cpi: can take both away if do .diff(12).diff(), but then lose interpretability of predictions and probably take out too much info
 #->try to use annualized % changes as in ecb working paper:
 df_growth=df_growth.drop(['Core_CPI', 'Headline_CPI'], axis=1)
@@ -492,6 +495,8 @@ for h in horizons:
     df_growth[f'target_headline_{h}m_diff'] =df_growth[f'target_headline_{h}m'].diff(12)
     df_growth[f'target_core_{h}m_diff'] =df_growth[f'target_core_{h}m'].diff(12)
 variables_to_plot= [f'target_headline_{h}m_diff' for h in horizons]+[f'target_core_{h}m_diff' for h in horizons]
+#reset chunk nr
+chunk_nr=1
 #plot acf/pacf
 for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     
