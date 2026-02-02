@@ -49,6 +49,8 @@ def run_experiment(config):
     #get target variables and forecast horizon from the config file
     targets=config['data']['targets']
     horizons=config['data']['horizons']
+    #SNB forecasts once per quarter: in march, june, september, december
+    snb_months=[3, 6, 9, 12]
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     step_months=config['data']['retrain_step_months']
@@ -182,6 +184,9 @@ def run_experiment(config):
                 for idx, date_idx in enumerate(test_indices):
                      #get date/origin of forecast
                      forecast_date= df.index[date_idx]
+                     #check if forecast month is in SNB months
+                     if forecast_date.month not in snb_months:
+                         continue  #skip this month, no forecast made by SNB
                      #calc evaluation target date: add h months to current date
                      target_date=forecast_date+pd.DateOffset(months=h)
                      #check if target date exists in df_yoy (if not, cannot evaluate)

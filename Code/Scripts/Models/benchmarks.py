@@ -1,9 +1,18 @@
+import sys
 import numpy as np
 import pandas as pd
 from arch import arch_model
-from scipy.stats import t
+from pyparsing import Path
+from scipy.stats import nct
 import warnings
-from Utils.metrics import calculate_crps 
+#get path for utils
+current_dir=Path(__file__).resolve().parent
+#get project root
+scripts_root = current_dir.parent.parent   
+sys.path.insert(0, str(scripts_root))
+from Scripts.Utils.density_fitting import fit_skew_t
+from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse 
+
 
 
 
@@ -11,7 +20,7 @@ def ar_garch_model(y_series, max_ar=4):
     """fits AR(p)-GARCH(1,1) with Student-t errors (p based on AIC)
     """
     #initalize for aic: fit const mean firs to set baseline
-    base_model=arch_model(y_series, mean='Constant', vol='GARCH', p=1, q=1, dist='t')
+    base_model=arch_model(y_series, mean='Constant', vol='GARCH', p=1, q=1, dist='skewt')
     #get results of base model
     best_res= base_model.fit(disp='off', show_warning=False)
     best_aic= best_res.aic #initialize best aic
@@ -21,7 +30,7 @@ def ar_garch_model(y_series, max_ar=4):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")                
             #fit model
-            model=arch_model(y_series, mean='AR', lags=p, vol='GARCH', p=1, q=1, dist='t')
+            model=arch_model(y_series, mean='AR', lags=p, vol='GARCH', p=1, q=1, dist='skewt')
             #estimate parameters
             res=model.fit(disp='off', show_warning=False)
         #if aic of this model is lower-> update
@@ -32,7 +41,7 @@ def ar_garch_model(y_series, max_ar=4):
             
     #if no AR model worked/increased AIC too much-> simpler const mean model
     if best_res is None:
-        model= arch_model(y_series, mean='Constant', vol='GARCH', p=1, q=1, dist='t') #-> const mean
+        model= arch_model(y_series, mean='Constant', vol='GARCH', p=1, q=1, dist='skewt') #-> const mean
         best_res= model.fit(disp='off', show_warning=False)     #estimate parameters
     return best_res
 
@@ -40,15 +49,19 @@ def run_experiment():
     #namp experiment for output later 
     experiment_name="Benchmark_ARGARCH"
     #load data
-    path='Code/Data/Cleaned_Data/data_stationary.csv'
-    df=pd.read_csv(path, index_col='Date', parse_dates=True)
+    project_root=current_dir.parent.parent
+    #get path to selected data
+    data_path =project_root /"Data"/ "Cleaned_Data"/"data_stationary.csv"
+    df =pd.read_csv(data_path, index_col='Date', parse_dates=True)
     #load yoy data for evaluation
-    df_yoy= pd.read_csv('Code/Data/Cleaned_Data/data_yoy.csv', index_col='Date', parse_dates=True)#load yoy for evaluation
+    df_yoy= pd.read_csv(project_root/"Data"/"Cleaned_Data"/"data_yoy.csv", index_col='Date', parse_dates=True)#load yoy for evaluation
     #need to define stuff, normally defined in the config files
     targets=["Headline", "Core"]  
     retrain_step_months= 3       #re-estimate model every quarter 
     horizons= [3, 6, 9, 12]  #define all horizons
-    eval_start_date= "2015-01-01" #start out of sample eval
+    eval_start_date= "2012-07-01" #start out of sample eval
+    #snb forecasts once per quarter: in march, june, september, december
+    snb_months=[3, 6, 9, 12]
     #define quantiles (for plotting vs crps calc)
     plot_qunat=[0.05, 0.16, 0.50, 0.84, 0.95]
     dense_quant= np.linspace(0.01, 0.99, 99)
@@ -86,9 +99,13 @@ def run_experiment():
             while current_idx<total_rows:
                 #identify dates now ->when forecast happens
                 forecast_date=df.index[current_idx]
+                #check whether is an SNB forecast month
+                if forecast_date.month not in snb_months:
+                    current_idx+=1   #move to next month
+                    continue
                 target_date= forecast_date+pd.DateOffset(months=h)  #target date
-                #train data: univariate-> only need target history up to current_idx
-                y_full_series=df[target_col].iloc[:current_idx]       #full history up to end of window
+                #train data: univariate-> only need target history up to current_idx: need most recent monthly data
+                y_full_series= df[target_col].iloc[:current_idx -(h-1)]      #full history up to end of window (only know j-month change that was completed before the change)
                 #to define train data need to cut off old data if needed
                 if len(y_full_series)> rolling_window_size:
                     y_train= y_full_series.iloc[-rolling_window_size:].dropna()  
@@ -110,7 +127,8 @@ def run_experiment():
                 #extract mean and var
                 mu_pred=forecasts.mean.iloc[0, 0]
                 sigma_pred=np.sqrt(forecasts.variance.iloc[0, 0])
-                nu_est =model_res.params['nu'] #student-t degrees of freedom
+                #extract skew-t parameters from GARCH fit
+                dist_params= model_res.params.iloc[-2:]
                 
 
                 #reconstruct to yoy changes: check if target date exists in yoy data
@@ -136,16 +154,31 @@ def run_experiment():
                     scaling_factor=h/12
                     mu_yoy=base_effect+(mu_pred*scaling_factor) #reconstruct mean
                     sigma_yoy=sigma_pred* np.sqrt(scaling_factor)    #scale only forecasted components volatility
-                #reconstruct quantiles to yoy
-                preds_plot_yoy= mu_yoy+sigma_yoy*t.ppf(plot_qunat, df=nu_est)
-                preds_dense_yoy= mu_yoy+sigma_yoy*t.ppf(dense_quant, df=nu_est)    
-
-                #evaluate CRPS
-                step_crps=calculate_crps([actual_val], preds_dense_yoy, dense_quant)
+                #ask model how many params needed
+                n_shape_params= model_res.model.distribution.num_params
+                #extract correct dist params
+                dist_params= model_res.params.iloc[-n_shape_params:]
+                #reconstrunct quantiles to yoy
+                preds_plot_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(plot_qunat, dist_params)
+                preds_dense_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(dense_quant, dist_params)
+                               
+                #get rmse of meadian forecast
+                sq_error = calculate_rmse(actual_val, preds_plot_yoy[2]) 
+                #use skew t to fit data for parametric crps eval
+                y_fit_data=preds_dense_yoy.flatten() #data to fit
+                skew_params=fit_skew_t(y_fit_data, dense_quant)
+                #calc pit values for crps eval
+                pit_val=nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                #calc parametric crps based on fitted skew-t
+                param_crps= calculate_crps(actual_val, skew_params)
+                #empirical crps to see what fitting cost us
+                empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy.reshape(1,-1), dense_quant)
+                
                 #store results
-                result = {'Date': forecast_date,'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[2], 
-                        'q05': preds_plot_yoy[0],'q16': preds_plot_yoy[1], 'q84': preds_plot_yoy[3],'q95': preds_plot_yoy[4], 
-                        'Steps_CRPS': step_crps}
+                result= {'Date': forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[2], 
+                    'q05': preds_plot_yoy[0], 'q16': preds_plot_yoy[1], 'q84': preds_plot_yoy[3], 'q95': preds_plot_yoy[4], 'Squared_Error': sq_error,
+                    'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': param_crps, 'PIT': pit_val, 'df_skewt': skew_params[0], 'nc_skewt': skew_params[1], 
+                    'loc_skewt': skew_params[2], 'scale_skewt': skew_params[3]}
                 #append to recursive preds
                 recursive_preds.append(result)
                 #to next window
@@ -155,9 +188,8 @@ def run_experiment():
             results_df = pd.DataFrame(recursive_preds)
             if not results_df.empty:
                 results_df.set_index('Date', inplace=True)
-                save_name = f"Results/Data_experiments/{experiment_name}_{target_name}_{h}m.csv"
+                save_name = f"Results/Data_experiments_benchmark/{experiment_name}_{target_name}_{h}m.csv"
                 results_df.to_csv(save_name)
-                print(f"Saved: {save_name}")
 
 if __name__ == "__main__":
     run_experiment()

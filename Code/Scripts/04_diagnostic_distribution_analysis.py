@@ -11,10 +11,10 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 #select only the two target variables in yoy not levels
 variables=['Headline', 'Core']
 #split the data based to avoid look-ahead bias
-train_df= df[:'2014-12-31']
+train_df= df[:'2012-07-01']
 
 #define the distributions to compare
-dist_names =['nct', 'skewnorm', 'johnsonsu', 'norm']
+dist_names =['nct', 'skewnorm', 'norm']
 #intialize results storage
 results_list=[]
 
@@ -38,7 +38,7 @@ for var in variables:
 results_df= pd.DataFrame(results_list)
 for var in variables:
     print(f"\nBest Distributions for {var}:")
-    print(results_df[results_df['Variable'] == var].sort_values('Log-Likelihood', ascending=False))
+    print(results_df[results_df['Variable']== var].sort_values('Log-Likelihood', ascending=False))
 
 #-> skew-t fits best on training data (for Core 1. and for headline 2. best)
 #why not Johnsonsu?skew-t is often more robust in economic forecasting than the Johnson SU.
@@ -49,16 +49,16 @@ for var in variables:
 headline_data= train_df['Headline'].dropna().values
 core_data= train_df['Core'].dropna().values
 #redefine distributions with nicer names for plotting
-dists= [('skewnorm', 'Skew-Normal'), ('johnsonsu', 'Johnson SU'), ('nct', 'Skew-T'), ('norm', 'Normal')]
+dists= [('skewnorm', 'Skew-Normal'), ('nct', 'Skew-T'), ('norm', 'Normal')]
 #create subplots
-fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+fig, axes= plt.subplots(2, 3, figsize=(20, 10))
 # 1. Global Styling
 sns.set_theme(style="whitegrid", palette="muted")
-plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.family']= 'sans-serif'
 plt.rcParams['axes.titleweight'] = 'bold'
 
-# Define a professional color palette
-colors = ["#4C72B0", "#DD8452", "#55A868", "#C44E52"]
+#color palette
+colors=["#4C72B0", "#55A868", "#C44E52"]
 #loop through variables and distributions to create qq-plots
 for row_idx, (data, var_name) in enumerate([(core_data, 'Core Inflation'), (headline_data, 'Headline Inflation')]):
     for col_idx, (dist_name, display_name) in enumerate(dists):

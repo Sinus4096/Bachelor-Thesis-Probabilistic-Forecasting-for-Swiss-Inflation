@@ -180,7 +180,7 @@ print(df_summary.to_string(index=False))
 
 
 #from now on to prevent data leakage, only use data from 2015 onwards (training data)
-df= df.loc[:'2014-12-31']
+df= df.loc[:'2012-07-01']
 
 #---------------------------------------
 #Check For Correlation

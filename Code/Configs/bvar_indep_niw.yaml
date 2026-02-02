@@ -1,15 +1,15 @@
-#config file for BVAR model with NIW prior
-experiment_name: "bvar_niw_hierarchical"
+#config file for BVAR model with independent NIW prior
+experiment_name: "bvar_independent_niw_hierarchical"
 model_type: "BVAR"
 #define the data used in the experiment
 data:
   targets: ["Headline", "Core"] #define the target variables to devide in X and Y
   horizons: [3, 6, 9, 12] #comparison on predefined list of forecast horizons
-  eval_start_date: "2015-01-01" #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  eval_start_date: "2012-07-01" #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
   retrain_step_months: 3 #update forecast every quarter, see reasoning in thesis
 #define the model
 model:
-  prior_type: "niw" #use independent NIW prior
+  prior_type: "independent_niw" #use independent NIW prior
   #def hierarchical hyperparameters (based on Korobilis 2020)
   params:
     sampling_iters: 12000 #number of Gibbs sampling iterations

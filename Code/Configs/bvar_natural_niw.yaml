@@ -6,7 +6,7 @@ model_type: "BVAR"
 data:
   targets: ["Headline", "Core"] 
   horizons: [3, 6, 9, 12] 
-  eval_start_date: "2015-01-01" 
+  eval_start_date: "2012-07-01" 
   retrain_step_months: 3 
 
 #define the model
