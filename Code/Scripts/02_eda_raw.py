@@ -25,6 +25,7 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #set style
 plt.style.use('seaborn-v0_8-whitegrid')
+plt.rcParams.update({'font.family': 'serif','axes.titlesize': 14,'axes.labelsize': 12,'figure.dpi': 300,'axes.titleweight': 'bold'})
 #create a grid
 fig, axes=plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True, gridspec_kw={'hspace': 0.1})
 
@@ -178,6 +179,37 @@ df_summary =pd.DataFrame(data)
 print(df_summary.to_string(index=False))
 
 
+
+
+
+#--------------------------------------------
+#outlier inspection
+#--------------------------------------------
+numeric_df= df.select_dtypes(include=['number'])  #select numeric columns
+    
+#calc IQR
+Q1= numeric_df.quantile(0.25)
+Q3=numeric_df.quantile(0.75)
+IQR=Q3-Q1
+#def bounds
+lower_bound=Q1- 1.5*IQR
+upper_bound =Q3+1.5*IQR
+#initialize table with descriptive stats
+stats= df.describe().T
+#count outliers per column: only extreme outliers beyond 3*IQR
+outliers=((numeric_df <(Q1-3.0*IQR))|(numeric_df>(Q3 +3.0*IQR))).sum()
+stats['extreme_outliers']= outliers
+stats['outlier_pct'] =(outliers/ len(df) *100).round(2).astype(str)+'%'
+#want 4 decimals
+pd.options.display.float_format ='{:.4f}'.format   
+#reorder cols
+cols= ['mean', 'std', 'min', '50%', 'max', 'extreme_outliers', 'outlier_pct']
+#print
+print(stats[cols])
+
+#observations:
+#outliers are just from economic shocks (see based on min and max)-> no further treatment needed
+#probably will need to standardize the data especially for feature importance of qrf and for config with ridge regression
 
 #from now on to prevent data leakage, only use data from 2015 onwards (training data)
 df= df.loc[:'2012-07-01']
@@ -361,7 +393,7 @@ print(adf_table)
 
 #Contradictions: 
 #interest rates (saron & variable morgages: look non-stationaryas were moving in long steps trending slightly upward but p<0.01-> stationary ->leave at levels
-#fin spread (EU&CH): looked stationary, adf-> non stationary-> keep as levels, adf test might have struggled to distinguish from non stationary RW
+#fin spread (EU&CH): looked stationary, adf-> non stationary-> keep as levels, high-p values in spreads are usually due to structural breaks or long-term persistence, not a true random walk
 # -> leave as they are to avoid introducing non-stationary noise in models
 #wage change: appeared stationary, adf non stationary, acf->moderate decay, pacf->AR(2)-> keep as levels to avoid introducing non-stationary noise &keep it interpretable
 #reason in levels preserves distinction between high-wage and low-wage regimes, allowing the QRF to capture state-dependent threshold effects
@@ -394,8 +426,9 @@ df_growth=np.log(df[trending_vars]).diff().dropna()*100
 df_growth[gdp_vars]= np.log(df[gdp_vars]).diff(3).dropna()*100
 
 #start the plotting to see if there is seasonal pattern now:
-#set colors
-color_acf ='#2E5A88' 
+#set colors nicer than before because those come into thesis
+MAIN_COLOR= '#2E4053'  
+CI_COLOR= '#AED6F1'
 #restrict number of figures to 5
 vars_per_fig=4
 #def chunknr for title
@@ -415,18 +448,21 @@ for start_idx in range(0, len(growth_vars), vars_per_fig):
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df_growth[var_name].dropna()
+        #clean name for title
+        clean_name =var_name.replace('target_', '').replace('_', ' ').title()
         #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        plot_acf(series, ax=axes[i, 0], lags=40, color=MAIN_COLOR, vlines_kwargs={"colors": MAIN_COLOR, "linewidth": 1.5}, alpha=0.05, title=f"ACF: {clean_name}")
         #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=MAIN_COLOR, vlines_kwargs={"colors": MAIN_COLOR, "linewidth": 1.5},alpha=0.05, title=f"PACF: {clean_name}")
         
         #styling
         for ax in axes[i]:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            ax.set_ylim(-1.1, 1.1)
-            ax.tick_params(axis='both', which='major', labelsize=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.set_ylim(-1.1, 1.1)
+                if len(ax.collections) >1:
+                    ax.collections[1].set_color(CI_COLOR)
+                    ax.collections[1].set_alpha(0.3)
     #figure title for all chunks
     fig.suptitle(f'ACF & PACF Plots of Detrended Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot

@@ -53,7 +53,6 @@ def run_experiment(config):
     snb_months=[3, 6, 9, 12]
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
-    step_months=config['data']['retrain_step_months']
 
     #for residual forecastin (in config file need residuals)
     use_residuals = config['model'].get('use_residual_forecasting', False)
@@ -122,16 +121,23 @@ def run_experiment(config):
             #initialize the recursive loop and then iterate til to end of df
             current_idx= start_idx
             while current_idx <total_rows:
-                #define the windows:
-                next_step_idx=min(current_idx+step_months, total_rows) #define the next quarter 
-                train_indices= range(0, current_idx)    #training set ranges from beginning up to the current index
-                test_indices = range(current_idx, next_step_idx)    #testin from current index up until next quarter
-
-                if len (test_indices)==0:
+                #get date of current index
+                current_date= df.index[current_idx]
+                #define forecast window:
+                forecast_date= current_date
+                target_date= forecast_date + pd.DateOffset(months=h)
+                #if not a forecast month: skip to next
+                if current_date.month not in snb_months:
+                    current_idx+= 1
+                    continue
+                #training set ranges from beginning up to the current index
+                train_indices= range(0, current_idx)    
+                
+                if current_idx >= total_rows:
                     break #get out if reached the last row already
 
                 #define ssubdf of original df up until next forecast step
-                df_slice=df.iloc[:next_step_idx].copy()
+                df_slice = df.iloc[:current_idx + 1].copy()
 
                 #separate X and Y
                 X_slice= df_slice.drop(columns=target_cols_to_drop) #drop all cols starting with target_
@@ -139,7 +145,7 @@ def run_experiment(config):
                 #define train and test set
                 X_train= X_slice.iloc[train_indices]
                 Y_train = Y_slice.iloc[train_indices]
-                X_test = X_slice.iloc[test_indices]
+                X_test = X_slice.iloc[[current_idx]]
                 #don't use df for testing /evaluating but the  yoy changes
                 #only drop NAN's for the training set: test might have NAN's in the end-> inference
                 Y_train= Y_train.dropna()
@@ -180,28 +186,25 @@ def run_experiment(config):
                 #add linear part if residual forecasting
                 preds_plot+= linear_add
                 preds_dense+= linear_add
-                #store the resultes nicer in predefined list
-                for idx, date_idx in enumerate(test_indices):
-                     #get date/origin of forecast
-                     forecast_date= df.index[date_idx]
-                     #check if forecast month is in SNB months
-                     if forecast_date.month not in snb_months:
-                         continue  #skip this month, no forecast made by SNB
-                     #calc evaluation target date: add h months to current date
-                     target_date=forecast_date+pd.DateOffset(months=h)
-                     #check if target date exists in df_yoy (if not, cannot evaluate)
-                     if target_date not in df_yoy.index:
-                         break 
+                
+                #check if target date exists in df_yoy (if not, cannot evaluate)
+                if target_date in df_yoy.index:
+                        
                      #get actual value from df_yoy
                      actual_val= df_yoy.loc[target_date, yoy_col] 
                      if forecast_method=='direct' or h==12:
                          #direct forecast or 12m ahead: use qrf preds directly
-                         preds_dense_yoy= preds_dense[idx:idx+1]
-                         preds_plot_yoy= preds_plot[idx:idx+1]
+                         preds_dense_yoy= preds_dense
+                         preds_plot_yoy= preds_plot
                      #else reconstruct the forecasted YoY                     
                      else: #if h<12, combine known histaory and model preds
                         months_back=12 - h  #need the change from t-(12-h) to t
                         history_date= forecast_date -pd.DateOffset(months=months_back)
+                        #check if history date exists
+                        if history_date not in df_yoy.index:
+                            #cannot reconstruct if no history date-> skip
+                            current_idx+=1
+                            continue
                         #get law log prices
                         p_t=np.log(df_yoy.loc[forecast_date, yoy_raw])
                         p_hist=np.log(df_yoy.loc[history_date, yoy_raw])
@@ -209,8 +212,8 @@ def run_experiment(config):
                         base_effect= (p_t-p_hist)*100
                         #deannualize the model preds
                         scaling_factor= h/12
-                        pred_dense_h_step= preds_dense[idx:idx+1] *scaling_factor
-                        pred_plot_h_step= preds_plot[idx:idx+1] *scaling_factor 
+                        pred_dense_h_step= preds_dense *scaling_factor
+                        pred_plot_h_step= preds_plot *scaling_factor 
                         #combine
                         preds_dense_yoy=base_effect +pred_dense_h_step
                         preds_plot_yoy= base_effect+pred_plot_h_step
@@ -236,8 +239,8 @@ def run_experiment(config):
                              'df_skewt': dist_params['df'], 'nc_skewt': dist_params['nc'], 'loc_skewt': dist_params['loc'], 'scale_skewt': dist_params['scale'], 'PIT': pit_val}
                     #append
                      recursive_preds.append(result)
-                #advance window 1quarter
-                current_idx= next_step_idx
+                #advance window 1month
+                current_idx+=1
             
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)

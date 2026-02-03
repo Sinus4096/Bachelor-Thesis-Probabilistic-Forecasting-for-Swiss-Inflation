@@ -1,10 +1,18 @@
+import sys
 import pandas as pd
 import numpy as np
 import yaml
 import argparse
 from pathlib import Path
-from Utils.bvar_utils import BVAR
-from Utils.metrics import calculate_crps
+#get path for utils
+current_dir=Path(__file__).resolve().parent
+#get project root
+scripts_root = current_dir.parent.parent   
+sys.path.insert(0, str(scripts_root))
+from Scripts.Utils.bvar_utils import BVAR
+from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse
+from Scripts.Utils.density_fitting import fit_skew_t
+
 
 def load_config(config_path):
     """
@@ -119,7 +127,7 @@ def run_experiment(config):
         results_df.set_index('Date', inplace=True)
         out_dir = Path("Results/Data_experiments")
         out_dir.mkdir(parents=True, exist_ok=True)
-        save_name=f"Results/Data_experiments/{config['experiment_name']}_{var_name}_{h}m.csv"
+        save_name=f"Results/Data_experiments_bvar/{config['experiment_name']}_{var_name}_{h}m.csv"
         results_df.to_csv(save_name)
 
 

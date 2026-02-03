@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 #preprocessing done according to 02_eda_raw.py (findings are based on training data but applied to whole data to prevent look-ahead bias)
 
 #import data
@@ -30,7 +31,9 @@ df_stationary[gdp_vars]= np.log(df[gdp_vars]).diff(3)*100
 #subtract the current columns from the original dataframe's columns
 already_processed=set(df_stationary.columns)  #all cols already in df_stationary
 all_columns= set(df.columns)       #all cols to process (are in the original df)
-remaining_vars= list(all_columns-already_processed)    #difference: which not already in df_stationary
+#make sure core and headline cpi are not in the remaining vars as they are already processed
+exclude_from_features ={'Headline_CPI', 'Core_CPI'}
+remaining_vars=list(all_columns -already_processed - exclude_from_features) #difference: which not already in df_stationary
 #loop through remaining vars and add them 
 for var in remaining_vars:
     df_stationary[var]= df[var]
@@ -133,7 +136,26 @@ for h in horizons:
     df_stationary2[f'target_core_{h}m'] = yoy_core_raw.shift(-h)
 
 
+#------------------------------------
+#look at stats-> need to standardize for qrf?
+#-------------------------
+print(df_stationary.describe().T)
 
+#----------------------
+#standardize features
+# --------------------------------
+#for feature importance of qrf and for ridge regression need to standardize the features but not the targets because want to keep them
+#in original units for evaluation later on
+
+#large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
+vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU']
+#def scaler
+scaler=StandardScaler()
+
+#only transform the specific columns that have large values
+df_stationary[vars_to_scale]= scaler.fit_transform(df_stationary[vars_to_scale])
+#recheck descriptive stats
+print(df_stationary.describe().T)
 
 
 
