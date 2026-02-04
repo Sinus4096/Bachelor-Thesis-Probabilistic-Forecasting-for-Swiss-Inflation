@@ -89,7 +89,7 @@ class BVAR:
         #prior means (as before)
         Phi_0=np.zeros((K, N))
         for idx in range(N):
-            Phi_0[1+idx, idx]=0.0   #white noise assumption
+            Phi_0[1+idx, idx]=1.0   #Random walk assumption
         #prior variance 
         Psi_diag=np.zeros(K)
         #intercept variance
@@ -196,159 +196,160 @@ class BVAR:
             #get dependent variables for univariate AR
             y_i =Y[:, idx]
             #use own p lags-> calc residuals
-            res=np.linalg.lstsq(X[:, 1:], y_i, rcond=None)[0]
-            residuals= y_i-X[:, 1:] @res
-            sigmas[idx]= np.sqrt(np.sum(residuals**2)/ (T-self.p-1))  #store std dev of residuals
+            res=np.linalg.lstsq(X, y_i, rcond=None)[0]
+            residuals= y_i-X @res
+            sigmas[idx]= np.sqrt(np.sum(residuals**2)/ (T-K))  #store std dev of residuals
 
-            #Minnesota config
-            #-----------------
-            if 'minnesota' in self.prior_type:
-                #def intercept tightness to 100 by default->loose (is common choice)
-                a3=self.params.get('alpha', 100.0)
+        #Minnesota config
+        #-----------------
+        if 'minnesota' in self.prior_type:
+            #def intercept tightness to 100 by default->loose (is common choice)
+            a3=self.params.get('alpha', 100.0)
 
 
-                #glp optimization->best lambda
-                res=optimize.minimize_scalar(lambda loglam: -self.log_ml_dummies(loglam, X, Y, a3, sigmas), bounds=(-3.0, 0.5), method='bounded')
-                #optimal lambda
-                final_lambda=np.exp(res.x)
-                #create dummy observations based on final lambda
-                X_dum, Y_dum= self.minnesota_dummies(N, final_lambda, a3, sigmas)
-                #augment data: instead of making giant cov matrix-> add rows to data
-                Y_star=np.vstack([Y_dum, Y])
-                X_star=np.vstack([X_dum, X])
-                #posterior estimation via OLS:
-                XX_star= X_star.T @X_star  #X'X
-                XX_inv= np.linalg.inv(XX_star)  #inverse
-                Phi_post= XX_inv@(X_star.T @Y_star) #posterior mean
-                #calc residuals
-                residuals= Y_star -X_star @Phi_post
-                #posterior scale matrix
-                S_post= residuals.T @residuals
-                #draws with gibbs sampling
-                n_draws=2000
-                df_post= Y_star.shape[0]- K  #posterior degrees of freedom
+            #glp optimization->best lambda
+            res=optimize.minimize_scalar(lambda loglam: -self.log_ml_dummies(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
+            #optimal lambda
+            final_lambda=np.exp(res.x)
+            #create dummy observations based on final lambda
+            X_dum, Y_dum= self.minnesota_dummies(N, final_lambda, a3, sigmas)
+            #augment data: instead of making giant cov matrix-> add rows to data
+            Y_star=np.vstack([Y_dum, Y])
+            X_star=np.vstack([X_dum, X])
+            #posterior estimation via OLS:
+            XX_star= X_star.T @X_star  #X'X
+            XX_inv= np.linalg.inv(XX_star)  #inverse
+            Phi_post= XX_inv@(X_star.T @Y_star) #posterior mean
+            #calc residuals
+            residuals= Y_star -X_star @Phi_post
+            #posterior scale matrix
+            S_post= residuals.T @residuals
+            #draws with gibbs sampling
+            n_draws=2000
+            df_post= Y_star.shape[0]- K  #posterior degrees of freedom
 
-                self.Sigma_draws= np.zeros((n_draws, N, N))  #initialize storage for sigma draws
-                self.Phi_draws= np.zeros((n_draws, K, N))  #initialize storage for phi draws
-                #precompute cholesky of XX_inv
-                L_XX=np.linalg.cholesky(XX_inv)
-                #iterate to draw phi coefficients
-                for draw in range(n_draws):
-                    #draw sigma through Inverse Wishart
-                    Sigma=stats.invwishart.rvs(df=df_post, scale=S_post)
-                    self.Sigma_draws[draw]=Sigma
-                    L_Sigma= np.linalg.cholesky(Sigma)  #Cholesky of sigma
-                    #standard normal draws to generate correlated normals
-                    Z= np.random.normal(size=(K, N))
-                    #draw phi
-                    self.Phi_draws[draw]= Phi_post + L_XX @Z @L_Sigma.T
+            self.Sigma_draws= np.zeros((n_draws, N, N))  #initialize storage for sigma draws
+            self.Phi_draws= np.zeros((n_draws, K, N))  #initialize storage for phi draws
+            #precompute cholesky of XX_inv
+            L_XX=np.linalg.cholesky(XX_inv)
+            #iterate to draw phi coefficients
+            for draw in range(n_draws):
+                #draw sigma through Inverse Wishart
+                Sigma=stats.invwishart.rvs(df=df_post, scale=S_post)
+                self.Sigma_draws[draw]=Sigma
+                L_Sigma= np.linalg.cholesky(Sigma)  #Cholesky of sigma
+                #standard normal draws to generate correlated normals
+                Z= np.random.normal(size=(K, N))
+                #draw phi
+                self.Phi_draws[draw]= Phi_post + L_XX @Z @L_Sigma.T
 
             
-            #independent normal-inverse wishart prior
-            #----------------------------------
-            elif 'independent_niw' in self.prior_type:
-                #prior hyperparameters
-                lam=0.2    #overall tightness eq 6 (=a1)
-                theta=0.5  #shrinkage on cross lags (=a2 in thsis)
-                #def intercept tightness to 100 by default->loose (is common choice)
-                a3=self.params.get('alpha', 100.0)
-                n_iter =self.params.get('sampling', {}).get('n_draws', 2000)  #number of posterior draws
-                burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
+        #independent normal-inverse wishart prior
+        #----------------------------------
+        elif 'independent_niw' in self.prior_type:
+            #prior hyperparameters
+            lam=0.2    #overall tightness eq 6 (=a1)
+            theta=0.5  #shrinkage on cross lags (=a2 in thsis)
+            #def intercept tightness to 100 by default->loose (is common choice)
+            a3=self.params.get('alpha', 100.0)
+            n_iter =self.params.get('sampling', {}).get('n_draws', 2000)  #number of posterior draws
+            burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
 
-                #prior moments
-                Phi_0, V_alpha_0_inv= self.minnesota_moments(N, lam, theta,a3, sigmas)   #get mean and prior precision through fct
-                alpha_0= Phi_0.flatten(order='F')   #vectorize prior mean
-                #prior scale matrix
-                S_0=np.diag(sigmas**2)
-                #prior degrees of freedom
-                nu_0= N+2
-                #initialize for Gibbs sampling
-                Phi_current= Phi_0.copy()
-                Sigma_current= np.diag(sigmas**2)   #start value for sigma
-                #initialize storage for draws: vec bzw matrix of zeros
-                self.Phi_draws= np.zeros((n_iter-burn_in, self.n_features, N))
-                self.Sigma_draws= np.zeros((n_iter-burn_in, N, N))
-                #X'X for precision update
-                XX= X.T @X
+            #prior moments
+            Phi_0, Psi_0= self.natural_moments(N, lam, theta,a3, sigmas)   #get mean and prior precision through fct
+            V_alpha_0_inv = np.linalg.inv(Psi_0)  #prior precision matrix
+            alpha_0= Phi_0.flatten(order='F')   #vectorize prior mean
+            #prior scale matrix
+            S_0=np.diag(sigmas**2)
+            #prior degrees of freedom
+            nu_0= N+2
+            #initialize for Gibbs sampling
+            Phi_current= Phi_0.copy()
+            Sigma_current= np.diag(sigmas**2)   #start value for sigma
+            #initialize storage for draws: vec bzw matrix of zeros
+            self.Phi_draws= np.zeros((n_iter-burn_in, self.n_features, N))
+            self.Sigma_draws= np.zeros((n_iter-burn_in, N, N))
+            #X'X for precision update
+            XX= X.T @X
 
 
-                #iterate through draws to sample from posterior: gibbs sampling
-                for it in range(n_iter):
-                    #take inverse of current sigma
-                    Sigma_inv= np.linalg.inv(Sigma_current)   
-                    #capture independent flexibility (posterior cov)
-                    V_alpha_post_inv=V_alpha_0_inv +np.kron(Sigma_inv,XX)
-                    V_alpha_post=np.linalg.inv(V_alpha_post_inv)   
-                    #calc weighted avf of prior and data
-                    data_term= (X.T@Y@Sigma_inv).flatten(order='F')
-                    alpha_hat= V_alpha_post @ (V_alpha_0_inv @alpha_0+data_term)
-                    #draw alpha from normal
-                    alpha_draw= np.random.multivariate_normal(alpha_hat, V_alpha_post)
-                    #convert vectorized alpha to (KxN)
-                    Phi_current=alpha_draw.reshape((self.n_features, N), order='F')
+            #iterate through draws to sample from posterior: gibbs sampling
+            for it in range(n_iter):
+                #take inverse of current sigma
+                Sigma_inv= np.linalg.inv(Sigma_current)   
+                #capture independent flexibility (posterior cov)
+                V_alpha_post_inv=V_alpha_0_inv +np.kron(Sigma_inv,XX)
+                V_alpha_post=np.linalg.inv(V_alpha_post_inv)   
+                #calc weighted avf of prior and data
+                data_term= (X.T@Y@Sigma_inv).flatten(order='F')
+                alpha_hat= V_alpha_post @ (V_alpha_0_inv @alpha_0+data_term)
+                #draw alpha from normal
+                alpha_draw= np.random.multivariate_normal(alpha_hat, V_alpha_post)
+                #convert vectorized alpha to (KxN)
+                Phi_current=alpha_draw.reshape((self.n_features, N), order='F')
 
-                    #compute residuals
-                    residuals= Y -X @Phi_current
-                    #calc posterior scale matrix
-                    S_post= S_0+ residuals.T @residuals
-                    nu_post= nu_0+ T   #posterior degrees of freedom
-                    
-                    #draw new Sigma from inverse-Wishart
-                    Sigma_current= stats.invwishart.rvs(df=nu_post, scale=S_post)
-
-                    #store draws after burn-in
-                    if it >= burn_in:
-                        self.Phi_draws[it-burn_in]= Phi_current
-                        self.Sigma_draws[it-burn_in]= Sigma_current
-            
-
-            # Natural Conjugate Normal-Wishart Prior
-            # -------------------------------------
-            elif 'natural_niw' in self.prior_type:
-                #hyperparameters as before
-                a3= self.params.get('alpha', 100.0)
-                n_draws=self.params.get('sampling', {}).get('n_draws', 2000)
-
-                #hyperparameter optimization for lambda/a1
-                res=optimize.minimize_scalar(lambda loglam: -self.log_ml_natural(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
-                a1=np.exp(res.x)  #optimal lambda
-
-                #priors; Psi is relative tightness matrix
-                Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas)
-                Psi_0_inv=np.diag(1.0/np.diag(Psi_0))              
-                #prior scale matrix
-                S_0 =np.diag(sigmas**2)
-                nu_0=N+ 2    #prior degrees of freedom
-                #posteriors (derived analytically)
-                XX=X.T @X
-                Psi_post_inv=Psi_0_inv +XX  #posterior precision
-                Psi_post =np.linalg.inv(Psi_post_inv)
-                
-                #post mean 
-                Phi_post =Psi_post @(Psi_0_inv @Phi_0 +X.T @Y)                
-                #efficient comp of scale matrix
-                term_prior= Phi_0.T @ Psi_0_inv @Phi_0
-                term_post= Phi_post.T@ Psi_post_inv @Phi_post
-                term_data= Y.T @Y
+                #compute residuals
+                residuals= Y -X @Phi_current
                 #calc posterior scale matrix
-                S_post= S_0 +term_data +term_prior -term_post
-                nu_post = nu_0+T
-
-                #direct sampling: draw from Inverse-Wishart
-                self.Sigma_draws =stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)
-                #initialize storage for phi draws
-                self.Phi_draws=np.zeros((n_draws, K, N))
-                #cholesky decomp of coefficient covariance matrix
-                L_Psi =np.linalg.cholesky(Psi_post)
-                #iterate to draw phi coefficients
-                for draw in range(n_draws):
-                    Sigma=self.Sigma_draws[draw] #draw sigma   
-                    #cholesky of sigma
-                    L_Sigma =np.linalg.cholesky(Sigma)  
+                S_post= S_0+ residuals.T @residuals
+                nu_post= nu_0+ T   #posterior degrees of freedom
                     
-                    #matrix-normal draw
-                    Z=np.random.normal(size=(K, N))
-                    self.Phi_draws[draw]= Phi_post+L_Psi @Z@L_Sigma.T
+                #draw new Sigma from inverse-Wishart
+                Sigma_current= stats.invwishart.rvs(df=nu_post, scale=S_post)
+
+                #store draws after burn-in
+                if it >= burn_in:
+                    self.Phi_draws[it-burn_in]= Phi_current
+                    self.Sigma_draws[it-burn_in]= Sigma_current
+            
+
+        # Natural Conjugate Normal-Wishart Prior
+        # -------------------------------------
+        elif 'natural_niw' in self.prior_type:
+            #hyperparameters as before
+            a3= self.params.get('alpha', 100.0)
+            n_draws=self.params.get('sampling', {}).get('n_draws', 2000)
+
+            #hyperparameter optimization for lambda/a1
+            res=optimize.minimize_scalar(lambda loglam: -self.log_ml_natural(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
+            a1=np.exp(res.x)  #optimal lambda
+
+            #priors; Psi is relative tightness matrix
+            Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas)
+            Psi_0_inv=np.diag(1.0/np.diag(Psi_0))              
+            #prior scale matrix
+            S_0 =np.diag(sigmas**2)
+            nu_0=N+ 2    #prior degrees of freedom
+            #posteriors (derived analytically)
+            XX=X.T @X
+            Psi_post_inv=Psi_0_inv +XX  #posterior precision
+            Psi_post =np.linalg.inv(Psi_post_inv)
+                
+            #post mean 
+            Phi_post =Psi_post @(Psi_0_inv @Phi_0 +X.T @Y)                
+            #efficient comp of scale matrix
+            term_prior= Phi_0.T @ Psi_0_inv @Phi_0
+            term_post= Phi_post.T@ Psi_post_inv @Phi_post
+            term_data= Y.T @Y
+            #calc posterior scale matrix
+            S_post= S_0 +term_data +term_prior -term_post
+            nu_post = nu_0+T
+
+            #direct sampling: draw from Inverse-Wishart
+            self.Sigma_draws =stats.invwishart.rvs(df=nu_post, scale=S_post, size=n_draws)
+            #initialize storage for phi draws
+            self.Phi_draws=np.zeros((n_draws, K, N))
+            #cholesky decomp of coefficient covariance matrix
+            L_Psi =np.linalg.cholesky(Psi_post)
+            #iterate to draw phi coefficients
+            for draw in range(n_draws):
+                Sigma=self.Sigma_draws[draw] #draw sigma   
+                #cholesky of sigma
+                L_Sigma =np.linalg.cholesky(Sigma)  
+                    
+                #matrix-normal draw
+                Z=np.random.normal(size=(K, N))
+                self.Phi_draws[draw]= Phi_post+L_Psi @Z@L_Sigma.T
         return self
     
     def forecast(self, data):

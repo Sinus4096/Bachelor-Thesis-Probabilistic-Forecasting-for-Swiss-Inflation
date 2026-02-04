@@ -111,12 +111,15 @@ rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
 print(rows_with_nan)
 #good: only ones left with missing targets
 
+#-----------------------------
+#create bvar df without lags as bvar creates its own lags, otherwise bvar will use lags to predict lags
+#-----------------------------
+df_bvar=df_stationary.copy()
+#drop lagged variables
+lagged_cols=[col for col in df_bvar.columns if 'lag_' in col]
+df_bvar.drop(columns=lagged_cols, inplace=True)
 
-#--------------------------------------
-#add time index
-#----------------------------
-#helpful to capture time trend and structural breaks in models like BVAR
-df_stationary['time_index']= np.arange(len(df_stationary))
+
 
 #----------------------------------------
 #for 2. configuration of the stationary data: direct 12-month YoY growth rate prediction (no 12/h scaling)
@@ -196,3 +199,5 @@ output_file2=output_path/'data_yoy.csv'
 df_yoy.to_csv(output_file2, index=True)
 output_file3= output_path/'data_stationary_direct.csv'
 df_stationary2.to_csv(output_file3, index=True)
+output_file4= output_path/'data_stationary_bvar.csv'
+df_bvar.to_csv(output_file4, index=True)

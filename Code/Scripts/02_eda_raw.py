@@ -25,7 +25,7 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 
 #set style
 plt.style.use('seaborn-v0_8-whitegrid')
-plt.rcParams.update({'font.family': 'serif','axes.titlesize': 14,'axes.labelsize': 12,'figure.dpi': 300,'axes.titleweight': 'bold'})
+
 #create a grid
 fig, axes=plt.subplots(nrows=2, ncols=1, figsize=(12, 10), sharex=True, gridspec_kw={'hspace': 0.1})
 

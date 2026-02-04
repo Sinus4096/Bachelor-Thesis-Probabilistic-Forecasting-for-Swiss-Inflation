@@ -9,7 +9,7 @@ data:
   #recursive updating settings (out-of-sample predictions like in ECB paper):
   evaluation_scheme: "expanding_window"
   eval_start_date: "2012-07-01"     #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
-  retrain_step_months: 1      #update forecast every quarter, see reasoning in thesis
+  retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
 
 #specify default model           
 model:
