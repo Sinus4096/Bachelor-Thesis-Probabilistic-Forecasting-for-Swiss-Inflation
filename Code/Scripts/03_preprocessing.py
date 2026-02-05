@@ -111,12 +111,34 @@ rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
 print(rows_with_nan)
 #good: only ones left with missing targets
 
+
+#------------------------------------
+#look at stats-> need to standardize for qrf?
+#-------------------------
+print(df_stationary.describe().T)
+
+#----------------------
+#standardize features
+# --------------------------------
+#for feature importance of qrf and for ridge regression need to standardize the features but not the targets because want to keep them
+#in original units for evaluation later on
+
+#large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
+vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU']
+#def scaler
+scaler=StandardScaler()
+
+#only transform the specific columns that have large values
+df_stationary[vars_to_scale]= scaler.fit_transform(df_stationary[vars_to_scale])
+#recheck descriptive stats
+print(df_stationary.describe().T)
+
 #-----------------------------
 #create bvar df without lags as bvar creates its own lags, otherwise bvar will use lags to predict lags
 #-----------------------------
 df_bvar=df_stationary.copy()
-#drop lagged variables
-lagged_cols=[col for col in df_bvar.columns if 'lag_' in col]
+#drop lagged variables and cycle features
+lagged_cols=[col for col in df_bvar.columns if 'cycle_' in col]
 df_bvar.drop(columns=lagged_cols, inplace=True)
 
 
@@ -139,26 +161,7 @@ for h in horizons:
     df_stationary2[f'target_core_{h}m'] = yoy_core_raw.shift(-h)
 
 
-#------------------------------------
-#look at stats-> need to standardize for qrf?
-#-------------------------
-print(df_stationary.describe().T)
 
-#----------------------
-#standardize features
-# --------------------------------
-#for feature importance of qrf and for ridge regression need to standardize the features but not the targets because want to keep them
-#in original units for evaluation later on
-
-#large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
-vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU']
-#def scaler
-scaler=StandardScaler()
-
-#only transform the specific columns that have large values
-df_stationary[vars_to_scale]= scaler.fit_transform(df_stationary[vars_to_scale])
-#recheck descriptive stats
-print(df_stationary.describe().T)
 
 
 

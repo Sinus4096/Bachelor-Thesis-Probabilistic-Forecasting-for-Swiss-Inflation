@@ -3,7 +3,7 @@ import glob
 import os
 
 # Define the paths to your results folders
-folders = ['Results/Data_experiments_benchmark', 'Results/Data_experiments_qrf']
+folders = ['Results/Data_experiments_benchmark','Results/Data_experiments_bvar', 'Results/Data_experiments_qrf']
 all_results = []
 
 for folder in folders:
@@ -21,8 +21,8 @@ for folder in folders:
             'File': file_name,
             'Mean_Empirical_CRPS': df['Empirical_CRPS'].mean(),
             'Mean_Parametric_CRPS': df['Parametric_CRPS'].mean(),
-            'Mean_Squared_Error': df['Squared_Error'].mean(),
-            'RMSE': (df['Squared_Error'].mean())**0.5,
+            #'Mean_Squared_Error': df['Squared_Error'].mean(),
+            #'RMSE': (df['Squared_Error'].mean())**0.5,
             'PIT_Mean': df['PIT'].mean(),
             'PIT_Std': df['PIT'].std()
         }

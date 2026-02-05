@@ -49,12 +49,12 @@ def run_experiment(config):
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     
-    recursive_results=[]  #to store results
     #model config from the config file
     model_conf= config['model']
     lags=model_conf.get('lags',2)
     prior_type=model_conf['prior_type']
     prior_params=model_conf['params']
+    
     #iterate to get right target col
     for h in horizons:
         current_target_cols=[f"target_{var.lower()}_{h}m" for var in target_names]
@@ -70,88 +70,93 @@ def run_experiment(config):
             start_idx= start_idx.start  #get integer index if slice
         #initialize for recursive predictions
         current_idx= start_idx
+        #initialize dictionary where keys are target names and values are empty lists
+        results_storage={t: [] for t in target_names}
 
         #recursive forecasting loop (do with direct forecasting)
         while current_idx< total_rows:
             #get date
             forecast_date= df_system.index[current_idx]
             target_date=forecast_date+pd.DateOffset(months=h)
-            #iterate through all horizons to store results
+            
             #skip if not a forecast month
-            if forecast_date.month not in snb_months or target_date not in df_yoy.index:
+            if target_date not in df_yoy.index:
                 current_idx+= 1
                 continue
             #prepare training data up to current idx 
             df_train= df_system.iloc[:current_idx+1].dropna(subset=available_targets)
-            
+                
             #initialize and fit BVAR model
             model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params)
-            model.fit(df_train, horizon=h)
+            model.fit(df_train)
             #def test set and include enough previous obs for lags
             X_test=df_system.iloc[current_idx-lags+1: current_idx+1]
             #forecast
             preds_draws_all=model.forecast(X_test)
+            #restribt evalluation to quarterly
+            if forecast_date.month in snb_months:
+                #iterate through all target variables& extract results
+                for i, var_name in enumerate(target_names):
+                    #preds draws made corresnponding to current target col
+                    preds_draws=preds_draws_all[:, i]
+                        
+                    #get actual yoy value
+                    actual_yoy=df_yoy.loc[target_date, var_name]
+                    #to calc price levels need levelsof core and headline cpi
+                    raw_col= f"{var_name}_level"
+                    #direct forecast evaluation: if h==12 can evaluate directly
+                    if h==12:
+                        preds_draws_yoy=preds_draws
+                    else:
+                        #for h<12: combine history with deannualized model predictions
+                        months_back=12- h#need the change from t-(12-h) to t
+                        history_date= forecast_date-pd.DateOffset(months=months_back)
 
-            #iterate through all target variables& extract results
-            for i, var_name in enumerate(target_names):
-                #preds draws made corresnponding to current target col
-                preds_draws=preds_draws_all[:, i]
-                
-                #get actual yoy value
-                actual_yoy=df_yoy.loc[target_date, var_name]
-                #to calc price levels need levelsof core and headline cpi
-                raw_col= f"{var_name}_level"
-                #direct forecast evaluation: if h==12 can evaluate directly
-                if h==12:
-                    preds_draws_yoy=preds_draws
-                else:
-                    #for h<12: combine history with deannualized model predictions
-                    months_back=12- h#need the change from t-(12-h) to t
-                    history_date= forecast_date-pd.DateOffset(months=months_back)
+                        if history_date not in df_yoy.index:
+                            continue  #skip if not enough history to deannualize
+                        #calc log price levels
+                        p_t= np.log(df_yoy.loc[forecast_date, raw_col])
+                        p_hist= np.log(df_yoy.loc[history_date, raw_col])   
+                        #deannualize model preds
+                        base_effect= (p_t-p_hist)*100
+                        scaling_factor= h/12
+                        preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
 
-                    if history_date not in df_yoy.index:
-                        continue  #skip if not enough history to deannualize
-                    #calc log price levels
-                    p_t= np.log(df_yoy.loc[forecast_date, raw_col])
-                    p_hist= np.log(df_yoy.loc[history_date, raw_col])   
-                    #deannualize model preds
-                    base_effect= (p_t-p_hist)*100
-                    scaling_factor= h/12
-                    preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
-
+                            
+                    #calc CRPS
+                    eval_quantiles= np.linspace(0.01, 0.99, 99)
+                    #bvar gives draws so we calc quantiles for the fit
+                    y_fit_quantiles= np.percentile(preds_draws_yoy, eval_quantiles*100)
+                    #fit skew-t to the draws
+                    skew_params= fit_skew_t(y_fit_quantiles, eval_quantiles)
+                    #empirical crps via quantiles
+                    empirical_crps = calculate_crps_quantile(actual_yoy, y_fit_quantiles[None, :], eval_quantiles)
+                    if hasattr(empirical_crps, '__iter__'): empirical_crps=np.mean(empirical_crps)   #if has multiple values average them
+                    #skew-t crps
+                    parametric_crps= calculate_crps(actual_yoy, skew_params)
+                    #PIT value
+                    pit_value= stats.nct.cdf(actual_yoy, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                    #RMSE 
+                    median= np.median(preds_draws_yoy) #get median forecast
+                    rmse= calculate_rmse(actual_yoy, median)
                     
-                #calc CRPS
-                eval_quantiles= np.linspace(0.01, 0.99, 99)
-                #bvar gives draws so we calc quantiles for the fit
-                y_fit_quantiles= np.percentile(preds_draws_yoy, eval_quantiles*100)
-                #fit skew-t to the draws
-                skew_params= fit_skew_t(y_fit_quantiles, eval_quantiles)
-                #empirical crps via quantiles
-                empirical_crps = calculate_crps_quantile(actual_yoy, y_fit_quantiles[None, :], eval_quantiles)
-                if hasattr(empirical_crps, '__iter__'): empirical_crps=np.mean(empirical_crps)   #if has multiple values average them
-                #skew-t crps
-                parametric_crps= calculate_crps(actual_yoy, skew_params)
-                #PIT value
-                pit_value= stats.nct.cdf(actual_yoy, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                #RMSE 
-                median= np.median(preds_draws_yoy) #get median forecast
-                rmse= calculate_rmse(actual_yoy, median)
-                
-                #store result
-                recursive_results.append({'Date': forecast_date, 'Variable': var_name, 'Horizon': h, 'Actual': actual_yoy,
-                                            'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
-                                            'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
-                                            'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
-                                            'scale_skewt': skew_params[3],'PIT': pit_value})
+                    #store result to specific target list
+                    results_storage[var_name].append({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
+                                                    'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
+                                                    'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
+                                                    'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
+                                                    'scale_skewt': skew_params[3],'PIT': pit_value})
             #advance window by 1 month
             current_idx +=1
 
+                    
+        #save and evaluate final recursive results
+        for var_name in target_names:
+            results_df = pd.DataFrame(results_storage[var_name])
+            results_df.set_index('Date', inplace=True)
                 
-    #save and evaluate final recursive results
-    results_df= pd.DataFrame(recursive_results)
-    results_df.set_index('Date', inplace=True)
-    save_name=f"Results/Data_experiments_qrf/{config['experiment_name']}_{target_names}_{h}m.csv"
-    results_df.to_csv(save_name)
+            save_name = f"Results/Data_experiments_bvar/{config['experiment_name']}_{var_name}_{h}m.csv"
+            results_df.to_csv(save_name)
 
 if __name__ =="__main__":
     parser =argparse.ArgumentParser()

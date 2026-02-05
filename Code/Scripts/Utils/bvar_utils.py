@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import stats, optimize, special
+import pandas as pd
 
 #see thesis for formulas
 class BVAR:
@@ -18,67 +19,94 @@ class BVAR:
         self.n_features= None  #to store number of features after lags (K= N*p +1)
         
 
-
-    def create_lags(self, data, horizon=1):
-        """create lagged data matrices X (Tx(Np+1)) and Y matrix (TxN) for VAR"""
-        #define Y
-        Y = data.values
-        T, N = Y.shape  #get dimensions
-        self.n_vars= N  #store number of variables
-        #create lag matrix
-        X_list= []  #to store lagged values
-        #create lags based on t, t-1,... 
-        for lag in range(1, self.p+1):
-            X_list.append(Y[self.p -lag:-lag, :])  #append lagged values: from T-p-lag to T-lag
+    def create_lags(self, data):
+        target_cols = [c for c in data.columns if 'target_' in c]
+        feature_cols = [c for c in data.columns if 'target_' not in c]
         
-        #concatenate lagged values
-        X_lags= np.column_stack(X_list)  
-        #add intercept column
-        X =np.column_stack([np.ones(X_lags.shape[0]), X_lags])
-        #store number of features 
-        self.n_features= X.shape[1]  
-        #cut Y so that if horizon is 1, we predict Y_{t+1} using X_t
-        Y_cut= Y[self.p +horizon- 1: , :]
-        #X and Y same length-> slice X to end where Y ends
-        if horizon >1:
-            X_cut= X[:-(horizon -1), :]
-        else:
-            X_cut= X
+        Y_raw = data[target_cols].values
+        X_raw = data[feature_cols].values
+        
+        self.n_vars = Y_raw.shape[1]
+        n_obs = len(data)
+        
+        # Define the structure: 0 (present), 1..p, and 12
+        self.lag_indices = sorted(list(set(range(0, self.p + 1)) | {12}))
+        max_lag = 12
+        
+        if n_obs <= max_lag:
+            raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires more than 12.")
 
-        return X_cut, Y_cut     #return matrix Xand Y
-    
+        X_list = []
+        valid_lags = []
 
-    def minnesota_dummies(self, N, a1, a3, sigmas): 
+        # We align all lags to the "Present" index (which starts at max_lag)
+        for lag in self.lag_indices:
+            start = max_lag - lag
+            end = n_obs - lag
+
+            # Only create lag if data is available
+            if start >= 0 and end > start:
+                X_list.append(X_raw[start:end, :])
+                valid_lags.append(lag)
+
+        # Update lag_indices to only those actually used
+        self.lag_indices = valid_lags
+
+        # We align all lags to the "Present" index (which starts at max_lag)
+        # Because Y is pre-shifted, Y[max_lag] is already the target for X[max_lag]
+        for lag in self.lag_indices:
+            start = max_lag - lag
+            end = n_obs - lag
+            X_list.append(X_raw[start:end, :])
+
+        X_combined = np.column_stack(X_list)
+        #remove duplicates due to forward fill
+        df_temp = pd.DataFrame(X_combined)
+        is_duplicate = df_temp.T.duplicated().values
+        self.kept_indices = np.where(~is_duplicate)[0]
+        # Add Intercept
+        X = np.column_stack([np.ones(X_combined.shape[0]), X_combined])
+        
+        # KEY FIX: Y is already pre-shifted to t+h. 
+        # We only slice it to match the rows we have full lag history for.
+        # We do NOT shift it relative to the 'Lag 0' feature.
+        Y_aligned = Y_raw[max_lag:, :]
+        
+        self.n_features = X.shape[1]
+        return X, Y_aligned
+
+    def minnesota_dummies(self, Y, a1, a2,a3, mu, sigmas): 
         """creates dummy observations: minnesota beliefs into data rows"""
-        p= self.p  #number of lags
-        #initialize prior dummy matrices
-        yd_1=np.zeros((N*p,N))
-        xd_1=np.zeros((N*p, 1+ N*p))
-        #loop through variables: lag of var i should be 0 or 1 
-        for lag in range(1, p+1):
-            for i in range(N):
-                row= (lag -1)*N +i  #row index
-                #minnesota belief: distant lags have smaller variance
-                scaling= (lag**1)/a1
-                #get lag we put prior on
-                col_idx= 1 +(lag-1)*N +i
-                xd_1[row, col_idx]= scaling*sigmas[i]  
-                #minnesota belief: own first lag=RW, else WN-> leave at 0
-                if lag==1:
-                    yd_1[row, i]= scaling*sigmas[i]
-        #intercept prior
-        yd_2=np.zeros((1, N))
-        xd_2=np.zeros((1, 1+ N*p))
-        xd_2[0,0]= 1.0/a3  #inverse variance
-        #covariance prior
-        yd_3=np.zeros((N, N))
-        xd_3=np.zeros((N, 1+ N*p))
-        np.fill_diagonal(yd_3, sigmas)  #prior is based on univariate ARs
-
-        X_dum= np.vstack([xd_1, xd_2, xd_3])  #stack up dummy of predictos
-        Y_dum= np.vstack([yd_1, yd_2, yd_3])   #stack up dummy of targets
+        N= self.n_vars  #number of variables
+        K = self.n_features  #total number of features
+        # 1. Tightness around zero for most coefficients
+        n_dum_1 = K - 1  # one dummy per feature (excluding intercept)
+        yd_1 = np.zeros((n_dum_1, N))
+        xd_1 = np.zeros((n_dum_1, K))
+        
+        # Add small regularization on all features
+        for i in range(n_dum_1):
+            xd_1[i, i+1] = a1  # regularize each feature (skip intercept at index 0)
+        
+        # 2. Intercept prior - shrink toward sample means
+        y_bar = np.mean(Y[:min(10, len(Y)), :], axis=0)
+        yd_2 = np.diag(y_bar) / mu
+        xd_2 = np.zeros((N, K))
+        xd_2[:, 0] = y_bar / mu  # prior on intercept
+        
+        # 3. Overall scale prior
+        yd_3 = (y_bar / a3).reshape(1, -1)
+        xd_3 = np.zeros((1, K))
+        xd_3[0, 0] = 1.0 / a3
+        
+        # 4. Sigma Prior (Standard Inverse Wishart scale)
+        yd_sig = np.diag(sigmas)
+        xd_sig = np.zeros((N, K))
+        
+        X_dum = np.vstack([xd_1, xd_2, xd_3, xd_sig])
+        Y_dum = np.vstack([yd_1, yd_2, yd_3, yd_sig])
+        
         return X_dum, Y_dum
-
 
 
     def natural_moments(self, N, lam, a3, sigmas):
@@ -89,7 +117,7 @@ class BVAR:
         #prior means (as before)
         Phi_0=np.zeros((K, N))
         for idx in range(N):
-            Phi_0[1+idx, idx]=1.0   #Random walk assumption
+            Phi_0[1+idx, idx]=0.0   #White Noise assumption:  Swiss inflation often means reverts quickly
         #prior variance 
         Psi_diag=np.zeros(K)
         #intercept variance
@@ -181,69 +209,76 @@ class BVAR:
         return log_ml
 
 
-    def fit(self, data, horizon=1):
+    def fit(self, data,n_draws=2000, burn_in=500):
         """estimate bvar
         """
         #create lagged matrices calling fct
-        X, Y= self.create_lags(data, horizon=horizon)
+        X, Y= self.create_lags(data)
         #get dimensions
         T, N=Y.shape    #nr of equations and obs.
         K=self.n_features  #nr of features
 
         #calc res variances from univariate AR
-        sigmas=np.zeros(N)  #to store scales
+        sigmas=[]  #to store scales
         for idx in range(N):
-            #get dependent variables for univariate AR
-            y_i =Y[:, idx]
-            #use own p lags-> calc residuals
-            res=np.linalg.lstsq(X, y_i, rcond=None)[0]
-            residuals= y_i-X @res
-            sigmas[idx]= np.sqrt(np.sum(residuals**2)/ (T-K))  #store std dev of residuals
-
+            #fit univariate AR to get residual std
+            res = np.diff(Y[:, idx])
+            sigmas.append(np.std(res) if len(res)>0 else 0.1)
+        sigmas = np.array(sigmas)
+        
         #Minnesota config
         #-----------------
         if 'minnesota' in self.prior_type:
-            #def intercept tightness to 100 by default->loose (is common choice)
-            a3=self.params.get('alpha', 100.0)
-
-
+            #def default params
+            a1 = self.params.get('lambda', 0.01)
+            a2 = self.params.get('theta', 0.15)
+            mu = self.params.get('mu', 1.0)
+            a3 = self.params.get('alpha', 100.0)
             #glp optimization->best lambda
-            res=optimize.minimize_scalar(lambda loglam: -self.log_ml_dummies(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
+            #res=optimize.minimize_scalar(lambda loglam: -self.log_ml_dummies(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
             #optimal lambda
-            final_lambda=np.exp(res.x)
+            #final_lambda=np.exp(res.x)
             #create dummy observations based on final lambda
-            X_dum, Y_dum= self.minnesota_dummies(N, final_lambda, a3, sigmas)
+            X_dum, Y_dum= self.minnesota_dummies(Y, a1, a2,a3, mu, sigmas)
+            
+            
             #augment data: instead of making giant cov matrix-> add rows to data
             Y_star=np.vstack([Y_dum, Y])
             X_star=np.vstack([X_dum, X])
-            #posterior estimation via OLS:
-            XX_star= X_star.T @X_star  #X'X
-            XX_inv= np.linalg.inv(XX_star)  #inverse
-            Phi_post= XX_inv@(X_star.T @Y_star) #posterior mean
-            #calc residuals
-            residuals= Y_star -X_star @Phi_post
-            #posterior scale matrix
-            S_post= residuals.T @residuals
-            #draws with gibbs sampling
-            n_draws=2000
-            df_post= Y_star.shape[0]- K  #posterior degrees of freedom
-
-            self.Sigma_draws= np.zeros((n_draws, N, N))  #initialize storage for sigma draws
-            self.Phi_draws= np.zeros((n_draws, K, N))  #initialize storage for phi draws
-            #precompute cholesky of XX_inv
-            L_XX=np.linalg.cholesky(XX_inv)
-            #iterate to draw phi coefficients
-            for draw in range(n_draws):
-                #draw sigma through Inverse Wishart
-                Sigma=stats.invwishart.rvs(df=df_post, scale=S_post)
-                self.Sigma_draws[draw]=Sigma
-                L_Sigma= np.linalg.cholesky(Sigma)  #Cholesky of sigma
-                #standard normal draws to generate correlated normals
-                Z= np.random.normal(size=(K, N))
-                #draw phi
-                self.Phi_draws[draw]= Phi_post + L_XX @Z @L_Sigma.T
-
+            # --- NUMERICAL STABILITY FIX ---
+            # We add 'jitter' to the diagonal of X'X
+            XX = X_star.T @ X_star
+            jitter = np.eye(K) * 1e-7 # Tiny nudge to make it positive definite
+            XX_stable = XX + jitter
             
+            # Use solve instead of inv
+            L_precision = np.linalg.cholesky(XX_stable)
+            Phi_post = np.linalg.solve(XX_stable, X_star.T @ Y_star)
+            
+            phi_list, sigma_list = [], []
+            Sigma = np.diag(sigmas**2)
+
+            for i in range(n_draws + burn_in):
+                # Draw Sigma
+                res = Y_star - X_star @ Phi_post
+                S_post = res.T @ res + np.eye(N) * 1e-6
+                Sigma = stats.invwishart.rvs(df=T + N, scale=S_post)
+                
+                # Draw Phi
+                Z = np.random.standard_normal((K, N))
+                L_S = np.linalg.cholesky(Sigma)
+                # Efficiently draw from Matrix Normal using Cholesky of precision
+                innovation = np.linalg.solve(L_precision.T, Z) @ L_S.T
+                Phi = Phi_post + innovation
+                
+                if i >= burn_in:
+                    phi_list.append(Phi)
+                    sigma_list.append(Sigma)
+
+            self.phi_draws = np.array(phi_list)
+            self.sigma_draws = np.array(sigma_list)
+
+                
         #independent normal-inverse wishart prior
         #----------------------------------
         elif 'independent_niw' in self.prior_type:
@@ -256,7 +291,7 @@ class BVAR:
             burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
 
             #prior moments
-            Phi_0, Psi_0= self.natural_moments(N, lam, theta,a3, sigmas)   #get mean and prior precision through fct
+            Phi_0, Psi_0= self.natural_moments(N, lam, a3, sigmas)   #get mean and prior precision through fct
             V_alpha_0_inv = np.linalg.inv(Psi_0)  #prior precision matrix
             alpha_0= Phi_0.flatten(order='F')   #vectorize prior mean
             #prior scale matrix
@@ -353,32 +388,44 @@ class BVAR:
         return self
     
     def forecast(self, data):
-        """iterative system forecasting"""
-        #get most recent lag window from data
-        Y_hist=data.values 
-        #create regressor vector for time T
-        lags=[]
-        for lag in range(1, self.p+1):
-            lags.append(Y_hist[-lag, :])  #append lagged values
-        #flatten and add intercept
-        x_t =np.concatenate([[1.0], np.concatenate(lags)])
-        N=self.n_vars       #nr of variables
-        #determine how many B simulations
-        n_draws=self.Phi_draws.shape[0]
-        #initialize 0-array for predictions
-        preds =np.zeros((n_draws, N))
+        
 
-        for idx in range(n_draws):
-            #select coefficient matrix
-            Phi = self.Phi_draws[idx]
-            #if have unique Cov Matrix-> different one for each draw
-            if self.Sigma_draws.ndim==3:
-                Sigma =self.Sigma_draws[idx]
-            else:
-                Sigma=self.Sigma_draws  #same for each draw
-            #direct prediction of Y_{T+h}
-            pred=x_t@Phi+np.random.multivariate_normal(np.zeros(N), Sigma)
-            preds[idx,:] =pred      #store prediction 
+        feature_cols = [c for c in data.columns if 'target_' not in c]
+        X_raw = data[feature_cols].values
+        
+        lags = []
+        n_obs = X_raw.shape[0]
+        required = max(self.lag_indices) + 1
+        available = X_raw.shape[0]
 
-        #return predictions
+        if available < required:
+            raise ValueError(
+                f"Forecast requires at least {required} observations, "
+                f"but only {available} were provided."
+            )
+
+        for lag in self.lag_indices:
+            idx = n_obs - lag - 1   # explicit positive index
+
+            if idx < 0:
+                raise ValueError(
+                    f"Forecast requires lag {lag}, "
+                    f"but only {n_obs} observations are available."
+                )
+
+            lags.append(X_raw[idx, :])
+
+        
+        X_combined = np.concatenate(lags)
+        
+        # --- FIX: MUST USE THE SAME UNIQUE INDICES AS TRAINING ---
+        X_unique = X_combined[self.kept_indices]
+        x_t = np.concatenate([[1.0], X_unique])
+        
+        n_draws = self.phi_draws.shape[0]
+        preds = np.zeros((n_draws, self.n_vars))
+        for i in range(n_draws):
+            noise = np.random.multivariate_normal(np.zeros(self.n_vars), self.sigma_draws[i])
+            preds[i, :] = x_t @ self.phi_draws[i] + noise
+            
         return preds
