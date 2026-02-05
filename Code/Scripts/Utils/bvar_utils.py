@@ -29,47 +29,35 @@ class BVAR:
         self.n_vars = Y_raw.shape[1]
         n_obs = len(data)
         
-        # Define the structure: 0 (present), 1..p, and 12
-        self.lag_indices = sorted(list(set(range(0, self.p + 1)) | {12}))
+        # Define the structure: lags 0, 1, and 12
+        self.lag_indices = [0, 1, 12]
         max_lag = 12
         
         if n_obs <= max_lag:
-            raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires more than 12.")
+            raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires at least 13 observations.")
 
         X_list = []
-        valid_lags = []
-
-        # We align all lags to the "Present" index (which starts at max_lag)
-        for lag in self.lag_indices:
-            start = max_lag - lag
-            end = n_obs - lag
-
-            # Only create lag if data is available
-            if start >= 0 and end > start:
-                X_list.append(X_raw[start:end, :])
-                valid_lags.append(lag)
-
-        # Update lag_indices to only those actually used
-        self.lag_indices = valid_lags
-
-        # We align all lags to the "Present" index (which starts at max_lag)
-        # Because Y is pre-shifted, Y[max_lag] is already the target for X[max_lag]
+        # REMOVED: The extra loops. We only need to build the list once.
         for lag in self.lag_indices:
             start = max_lag - lag
             end = n_obs - lag
             X_list.append(X_raw[start:end, :])
 
         X_combined = np.column_stack(X_list)
-        #remove duplicates due to forward fill
+        
+        # Deduplication logic
         df_temp = pd.DataFrame(X_combined)
         is_duplicate = df_temp.T.duplicated().values
         self.kept_indices = np.where(~is_duplicate)[0]
-        # Add Intercept
-        X = np.column_stack([np.ones(X_combined.shape[0]), X_combined])
         
-        # KEY FIX: Y is already pre-shifted to t+h. 
-        # We only slice it to match the rows we have full lag history for.
-        # We do NOT shift it relative to the 'Lag 0' feature.
+        # FIX: Apply kept_indices to X_combined BEFORE adding the intercept
+        X_unique = X_combined[:, self.kept_indices]
+        
+        # Add Intercept (Size will be: 1 + number of unique features)
+        # Based on your error, this should result in size 28
+        X = np.column_stack([np.ones(X_unique.shape[0]), X_unique])
+        
+        # Align Y: Y starts from max_lag to match the lag history
         Y_aligned = Y_raw[max_lag:, :]
         
         self.n_features = X.shape[1]
@@ -388,44 +376,35 @@ class BVAR:
         return self
     
     def forecast(self, data):
-        
-
+        # 1. Extract only the predictor columns (match create_lags logic)
         feature_cols = [c for c in data.columns if 'target_' not in c]
         X_raw = data[feature_cols].values
         
         lags = []
         n_obs = X_raw.shape[0]
-        required = max(self.lag_indices) + 1
-        available = X_raw.shape[0]
-
-        if available < required:
-            raise ValueError(
-                f"Forecast requires at least {required} observations, "
-                f"but only {available} were provided."
-            )
-
+        
+        # 2. Extract current values and lags 1 and 12
+        # Data must contain rows [t, t-1, ... t-12] (13 total)
         for lag in self.lag_indices:
-            idx = n_obs - lag - 1   # explicit positive index
-
-            if idx < 0:
-                raise ValueError(
-                    f"Forecast requires lag {lag}, "
-                    f"but only {n_obs} observations are available."
-                )
-
+            idx = n_obs - lag - 1 
             lags.append(X_raw[idx, :])
 
-        
+        # Combine into a single horizontal vector
         X_combined = np.concatenate(lags)
         
-        # --- FIX: MUST USE THE SAME UNIQUE INDICES AS TRAINING ---
+        # 3. Apply the EXACT same deduplication used during training
         X_unique = X_combined[self.kept_indices]
+        
+        # 4. Add the intercept
         x_t = np.concatenate([[1.0], X_unique])
         
+        # Now x_t size should be 28, matching phi_draws
         n_draws = self.phi_draws.shape[0]
         preds = np.zeros((n_draws, self.n_vars))
+        
         for i in range(n_draws):
             noise = np.random.multivariate_normal(np.zeros(self.n_vars), self.sigma_draws[i])
+            # Matrix multiplication will now succeed: (28) @ (28, n_vars)
             preds[i, :] = x_t @ self.phi_draws[i] + noise
             
         return preds

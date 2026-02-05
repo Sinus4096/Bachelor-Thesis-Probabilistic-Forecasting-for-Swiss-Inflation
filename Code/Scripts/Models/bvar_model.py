@@ -45,7 +45,8 @@ def run_experiment(config):
     snb_months=[3,6,9,12]
     #identify predictors
     predictor_cols= [col for col in df.columns if col not in target_names and 'target_' not in col] 
-    
+    # SET OFFSET: Define the 12-month "burn-in" period
+    training_offset = 13
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     
@@ -65,9 +66,11 @@ def run_experiment(config):
         #create system for this horizon
         df_system=df[available_targets + predictor_cols].copy()
         total_rows= len(df_system)  #total rows in data
-        start_idx= df_system.index.get_loc(eval_start_date) #get index of start date
-        if isinstance(start_idx, slice):
-            start_idx= start_idx.start  #get integer index if slice
+        requested_start_idx = df_system.index.get_loc(eval_start_date) #get index of start date
+
+        if isinstance(requested_start_idx, slice):
+            requested_start_idx= requested_start_idx.start  #get integer index if slice
+        start_idx = max(requested_start_idx, training_offset)
         #initialize for recursive predictions
         current_idx= start_idx
         #initialize dictionary where keys are target names and values are empty lists
@@ -84,13 +87,13 @@ def run_experiment(config):
                 current_idx+= 1
                 continue
             #prepare training data up to current idx 
-            df_train= df_system.iloc[:current_idx+1].dropna(subset=available_targets)
+            df_train = df_system.iloc[training_offset : current_idx + 1].dropna(subset=available_targets)
                 
             #initialize and fit BVAR model
             model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params)
             model.fit(df_train)
             #def test set and include enough previous obs for lags
-            X_test=df_system.iloc[current_idx-lags+1: current_idx+1]
+            X_test = df_system.iloc[current_idx - (training_offset - 1) : current_idx + 1]
             #forecast
             preds_draws_all=model.forecast(X_test)
             #restribt evalluation to quarterly
