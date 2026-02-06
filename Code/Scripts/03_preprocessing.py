@@ -90,7 +90,26 @@ for h in horizons:
 #see if worked:
 print(df_stationary.tail())
 
+#-----------------------------
+#create bvar df without lags as bvar creates its own lags, otherwise bvar will use lags to predict lags
+#-----------------------------
+df_bvar=df_stationary.copy()
+#drop lagged variables and cycle features
+lagged_cols=[col for col in df_bvar.columns if 'cycle_' in col or 'lag_' in col]  #leave autoregressive features so bvar can make lags based on them
+df_bvar.drop(columns=lagged_cols, inplace=True)
 
+#for bvar will leave NA for now and start training later as 12. lag will be created by the model itself-> set start date to latest
+#available date of predictors :
+start_date=df_bvar['infl_e_current_year'].first_valid_index()
+df_bvar= df_bvar.loc[start_date:] 
+
+
+
+#---------------------------
+#add time index feature for trend capture
+#---------------------------------
+#only for qrf model as bvar can capture trend via its priors
+df_stationary['time_index']= np.arange(len(df_stationary))
 
 #-----------------------------
 #cope with NA's
@@ -124,22 +143,19 @@ print(df_stationary.describe().T)
 #in original units for evaluation later on
 
 #large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
-vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU']
+vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU', 'M3_change', 'M2_change', 'M1_change']
 #def scaler
 scaler=StandardScaler()
 
+#split to training and test to prevent look-ahead bias in scaling
+
 #only transform the specific columns that have large values
 df_stationary[vars_to_scale]= scaler.fit_transform(df_stationary[vars_to_scale])
+#df_bvar[vars_to_scale]= scaler.fit_transform(df_bvar[vars_to_scale])
 #recheck descriptive stats
 print(df_stationary.describe().T)
 
-#-----------------------------
-#create bvar df without lags as bvar creates its own lags, otherwise bvar will use lags to predict lags
-#-----------------------------
-df_bvar=df_stationary.copy()
-#drop lagged variables and cycle features
-lagged_cols=[col for col in df_bvar.columns if 'cycle_' in col]
-df_bvar.drop(columns=lagged_cols, inplace=True)
+
 
 
 

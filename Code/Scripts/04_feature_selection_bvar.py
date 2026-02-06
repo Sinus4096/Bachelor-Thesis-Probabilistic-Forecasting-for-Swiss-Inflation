@@ -56,8 +56,8 @@ top_7_features = [
     'PPI', 
     'M3_change', 
     'Exchange_Rate_CHF', 
-    
-    'headline_1m', 'core_1m', 
+    'Saron_Rate', 'kofbarometer', 'fin_spread', 'real_turnover', 'Manufacturing_EU', 'Wage_change', 'EU_fin_spread', 'M1_change',
+    'headline_1m', 'core_1m'
 ]
 # 'Saron_Rate', 'kofbarometer', 'fin_spread', 'real_turnover', 'Manufacturing_EU', 'Wage_change', 'EU_fin_spread', 'M1_change',
 

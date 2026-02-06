@@ -45,8 +45,8 @@ def run_experiment(config):
     snb_months=[3,6,9,12]
     #identify predictors
     predictor_cols= [col for col in df.columns if col not in target_names and 'target_' not in col] 
-    # SET OFFSET: Define the 12-month "burn-in" period
-    training_offset = 13
+    #define 12-month burn-in period
+    training_offset=13
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     
@@ -54,6 +54,7 @@ def run_experiment(config):
     model_conf= config['model']
     lags=model_conf.get('lags',2)
     prior_type=model_conf['prior_type']
+    implementation_type= model_conf.get('implementation_type','dummies')
     prior_params=model_conf['params']
     
     #iterate to get right target col
@@ -90,7 +91,7 @@ def run_experiment(config):
             df_train = df_system.iloc[training_offset : current_idx + 1].dropna(subset=available_targets)
                 
             #initialize and fit BVAR model
-            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params)
+            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
             model.fit(df_train)
             #def test set and include enough previous obs for lags
             X_test = df_system.iloc[current_idx - (training_offset - 1) : current_idx + 1]

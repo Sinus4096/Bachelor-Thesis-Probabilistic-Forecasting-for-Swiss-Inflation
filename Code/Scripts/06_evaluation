@@ -1,0 +1,203 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
+
+# --- CONFIGURATION ---
+base_path = 'Code/Results/Data_experiments_benchmark'
+data_type = 'Headline' 
+models = ['ARGARCH', 'BVAR', 'QRF']  # Add your 3 models here
+horizons = [3, 6, 9, 12]
+rolling_window = 12 # 3 years if quarterly
+
+# Storage: data_dict['ARGARCH'][3] -> DataFrame
+data_dict = {m: {h: None for h in horizons} for m in models}
+
+# --- LOADING LOOP ---
+for model in models:
+    for h in horizons:
+        file_name = f'Benchmark_{model}_{data_type}_{h}m.csv'
+        file_path = os.path.join(base_path, file_name)
+        
+        if os.path.exists(file_path):
+            df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
+            # Ensure required columns exist (rename if your CSVs use different names)
+            # df = df.rename(columns={'old_name': 'PIT', 'old_crps': 'Parametric_CRPS'})
+            data_dict[model][h] = df
+        else:
+            print(f"Warning: {file_name} not found. Generating mock data for visualization.")
+            # --- MOCK DATA (Remove this block when files are ready) ---
+            dates = pd.date_range(start='2010-01-01', periods=60, freq='Q')
+            data_dict[model][h] = pd.DataFrame({
+                'PIT': np.random.uniform(0, 1, 60),
+                'Parametric_CRPS': np.random.exponential(0.1, 60) + (h/20),
+                'Forecast_median': np.random.normal(2, 0.5, 60),
+                'Actual': np.random.normal(2, 0.6, 60)
+            }, index=dates)
+            print(f"Warning: File not found at {file_path}")
+
+# Now your plotting code (Plot Type A and B) will run using data_dict
+
+fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(15, 18), sharex=True, sharey=True)
+
+for i, h in enumerate(horizons):
+    for j, model in enumerate(models):
+        ax = axes[i, j]
+        df = data_dict[model][h]
+        
+        if df is not None:
+            # Calculate Empirical CDF
+            pit_sorted = np.sort(df['PIT'].dropna())
+            n = len(pit_sorted)
+            y_vals = np.arange(1, n + 1) / n
+            
+            # Plotting
+            ax.plot(pit_sorted, y_vals, color='black', label='Empirical CDF')
+            ax.plot([0, 1], [0, 1], color='red', linestyle='--', alpha=0.7, label='Uniform')
+            
+            # Confidence Bands (95%)
+            ks_critical = 1.36 / np.sqrt(n)
+            ax.fill_between(np.linspace(0, 1, n), 
+                            np.clip(np.linspace(0, 1, n) - ks_critical, 0, 1),
+                            np.clip(np.linspace(0, 1, n) + ks_critical, 0, 1),
+                            color='gray', alpha=0.1)
+
+        if i == 0: ax.set_title(f'MODEL: {model}', fontweight='bold')
+        if j == 0: ax.set_ylabel(f'Horizon: {h}m\nCumulative Prob', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+fig.suptitle(f'PIT Calibration Comparison ({data_type})', fontsize=16)
+plt.show()
+# --- 3. PLOT TYPE B: ROLLING CRPS COMPARISON (Figure 5 in paper) ---
+# Compares models over time. 
+# Grid: 2x2 (One subplot per horizon), containing lines for all 3 models.
+
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(14, 10))
+axes = axes.flatten() # Flatten 2D array to 1D for easy iteration
+
+# Define window size (Paper uses 3 years = 12 quarters if data is quarterly)
+rolling_window = 12 
+
+colors = {'QRF': 'red', 'BVAR': 'black', 'SPF': 'blue'} # Colors matching paper style roughly
+styles = {'QRF': '-', 'BVAR': '--', 'SPF': ':'}
+
+for i, h in enumerate(horizons):
+    ax = axes[i]
+    
+    for model in models:
+        df = data_dict[model][h]
+        
+        # Calculate Rolling Mean CRPS
+        # We assume the index is datetime (Target_date)
+        rolling_crps = df['Parametric_CRPS'].rolling(window=rolling_window).mean()
+        
+        ax.plot(df.index, rolling_crps, 
+                label=model, 
+                color=colors.get(model, 'gray'), 
+                linestyle=styles.get(model, '-'), 
+                linewidth=2)
+    
+    ax.set_title(f'Forecast Horizon: {h} Months', fontsize=12)
+    ax.set_ylabel('Rolling CRPS (Lower is Better)')
+    ax.grid(True, alpha=0.3)
+    if i == 0: # Only add legend to first plot to avoid clutter
+        ax.legend()
+
+fig.suptitle(f'Predictive Performance (Rolling {rolling_window}-Period CRPS)', fontsize=16)
+plt.tight_layout()
+plt.show()
+
+fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(16, 10), sharex=True)
+axes = axes.flatten()
+
+colors = {'ARGARCH': '#1f77b4', 'BVAR': '#ff7f0e', 'QRF': '#2ca02c'}
+
+for i, h in enumerate(horizons):
+    ax = axes[i]
+    for model in models:
+        df = data_dict[model][h]
+        if df is not None:
+            rolling_crps = df['Parametric_CRPS'].rolling(window=rolling_window).mean()
+            ax.plot(df.index, rolling_crps, label=model, color=colors.get(model), linewidth=2)
+    
+    ax.set_title(f'Horizon: {h} Months', fontsize=13, fontweight='bold')
+    ax.set_ylabel('Rolling CRPS (Lower is Better)')
+    ax.legend(loc='upper left', fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+fig.suptitle(f'Predictive Performance Comparison (Rolling {rolling_window}Q CRPS)', fontsize=16)
+plt.show()
+
+
+# Prepare data for summary
+summary_data = []
+for model in models:
+    for h in horizons:
+        avg_score = data_dict[model][h]['Parametric_CRPS'].mean()
+        summary_data.append({'Model': model, 'Horizon': f'{h}m', 'Avg_CRPS': avg_score})
+
+df_summary = pd.DataFrame(summary_data)
+
+plt.figure(figsize=(10, 6))
+sns.barplot(data=df_summary, x='Horizon', y='Avg_CRPS', hue='Model', palette='viridis')
+plt.title('Summary Performance: Average CRPS per Model and Horizon')
+plt.ylabel('Mean CRPS (Lower is Better)')
+plt.grid(axis='y', alpha=0.3)
+plt.show()
+
+
+def plot_comparative_skew_t(data_dict, target_date, horizon):
+    """
+    Plots the predictive density of all 3 models for a specific date and horizon
+    to compare their uncertainty and skewness.
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # Colors for the models
+    colors = {'ARGARCH': '#1f77b4', 'BVAR': '#ff7f0e', 'QRF': '#2ca02c'}
+    
+    actual_value = None
+    
+    for model in models:
+        df = data_dict[model][horizon]
+        
+        if df is not None and target_date in df.index:
+            row = df.loc[target_date]
+            
+            # Extract parameters 
+            # (Ensure these column names match your CSV headers exactly)
+            df_val, nc_val = row['df_skewt'], row['nc_skewt']
+            loc_val, scale_val = row['loc_skewt'], row['scale_skewt']
+            actual_value = row['Actual'] # This should be the same across models
+            
+            # Create x range for plotting
+            x = np.linspace(loc_val - 5*scale_val, loc_val + 5*scale_val, 500)
+            
+            # Calculate PDF using scipy nct
+            from scipy.stats import nct
+            pdf = nct.pdf(x, df_val, nc_val, loc=loc_val, scale=scale_val)
+            
+            # Plot the line for this model
+            plt.plot(x, pdf, lw=2.5, label=f'{model}', color=colors.get(model))
+            plt.fill_between(x, pdf, alpha=0.1, color=colors.get(model))
+    
+    # Add the Actual realized value as a vertical line
+    if actual_value is not None:
+        plt.axvline(actual_value, color='black', linestyle='--', linewidth=2, 
+                    label=f'Actual Value: {actual_value:.2f}')
+
+    plt.title(f'Predictive Density Comparison: {target_date.date()} ({horizon}m Horizon)', fontsize=14)
+    plt.xlabel('Inflation Rate (or Target Variable)')
+    plt.ylabel('Probability Density')
+    plt.legend()
+    plt.grid(alpha=0.2)
+    plt.show()
+
+# --- EXAMPLE USAGE ---
+# Pick a date that exists in your index (e.g., the last date)
+sample_date = data_dict['ARGARCH'][3].index[-1] 
+plot_comparative_skew_t(data_dict, sample_date, horizon=3)
+

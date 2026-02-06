@@ -12,6 +12,7 @@ data:
 #define the model
 model:
   prior_type: "natural_niw" 
+  implementation_type: 'dummies'
   params:
     n_draws: 2000 #sampling param: direct ->no burn in      
     alpha: 100.0  #intercept tightness (a3)
