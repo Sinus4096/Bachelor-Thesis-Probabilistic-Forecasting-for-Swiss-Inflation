@@ -69,7 +69,7 @@ for i in [1, 2, 12]:
 #--------------------------
 #add Cycle features: sine/consine transformations
 #--------------------------------
-#are better than adding monthly dummies for bvar model as they do not eat up so many degrees of freedom
+#are better than adding monthly dummies as do not eat up so many degrees of freedom
 period= 12
 #get the month index (1-12)
 month_idx=df_stationary.index.month
@@ -123,7 +123,10 @@ print(rows_with_nan)
 #->NA lags are as expected in the first two rows-> set start date later to avoid crash of qrf
 #do not drop NA's of targets later here: their availability depends on the forecast horizon
 #as will evaluate using yoy inflation dropping later won't make a change
-start_date=df_stationary['headline_lag_12'].first_valid_index()
+#set start date as last available date of predictors +1 year as bvar will have to create a 12 month lag for it too
+base_date=df_stationary['infl_e_current_year'].first_valid_index()
+#add 1 year to that date 
+start_date= base_date+pd.DateOffset(years=1)
 df_stationary= df_stationary.loc[start_date:] 
 #recheck
 rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
@@ -142,10 +145,21 @@ print(df_stationary.describe().T)
 #for feature importance of qrf and for ridge regression need to standardize the features but not the targets because want to keep them
 #in original units for evaluation later on
 
+#need to standardize based on data we have available: meaning based on training data to prevent look-ahead bias
+#define split date
+test_start_date= '2013-07-01'
+
 #large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
 vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU', 'M3_change', 'M2_change', 'M1_change']
 #def scaler
 scaler=StandardScaler()
+#fit scale on training data only
+scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
+#transform the data
+df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
+#apply same transformation to your BVAR dataframe so they stay identical
+df_bvar[vars_to_scale] = scaler.transform(df_bvar[vars_to_scale])
+
 
 #split to training and test to prevent look-ahead bias in scaling
 

@@ -11,7 +11,7 @@ df=pd.read_csv(path, index_col='Date', parse_dates=True)
 #select only the two target variables in yoy not levels
 variables=['Headline', 'Core']
 #split the data based to avoid look-ahead bias
-train_df= df[:'2012-07-01']
+train_df= df[:'2013-07-01']
 
 #define the distributions to compare
 dist_names =['nct', 'skewnorm', 'norm']

@@ -5,7 +5,7 @@ model_type: "BVAR"
 data:
   targets: ["Headline", "Core"]    #define the target variables to devide in X and Y
   horizons: [3, 6, 9, 12]    #comparison on predefined list of forecast horizons
-  eval_start_date: "2012-07-01"        #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  eval_start_date: "2013-07-01"        #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
   retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
 #define the model  
 model:

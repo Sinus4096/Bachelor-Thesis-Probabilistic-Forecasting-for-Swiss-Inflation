@@ -59,7 +59,7 @@ def run_experiment():
     targets=["Headline", "Core"]  
     retrain_step_months= 3       #re-estimate model every quarter 
     horizons= [3, 6, 9, 12]  #define all horizons
-    eval_start_date= "2012-07-01" #start out of sample eval
+    eval_start_date= "2013-07-01" #start out of sample eval
     #snb forecasts once per quarter: in march, june, september, december
     snb_months=[3, 6, 9, 12]
     #define quantiles (for plotting vs crps calc)

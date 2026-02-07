@@ -375,8 +375,8 @@ class BVAR:
         # -------------------------------------
         elif 'natural_niw' in self.prior_type:
             #def default params
-            a1=self.params.get('lambda', 1.0)
-            a2= self.params.get('theta', 1.0)    #no cross-variable shrinkage for natural conjugate
+            a1=self.params.get('lambda', 0.1)
+            a2= self.params.get('theta', 0.1)    
             mu= self.params.get('mu', 1.0)
             a3= self.params.get('alpha', 100.0)
             #glp optimization->best lambda (optional)

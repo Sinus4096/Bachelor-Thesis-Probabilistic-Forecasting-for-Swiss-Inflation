@@ -186,7 +186,7 @@ def load_interest_rates(file_path):
 
     #merge the two dfs    
     df =pd.concat([st_libor, lr_interest], axis=1, join='outer')
-    #take monthly mean to smooth daily volatility (no data leakage as will devide to train and test monthly) 
+    #take monthly mean to smooth daily volatility (no data leakage as will shift data later for forecasting) 
     df =df.resample('MS').mean()
     #calculate the financial spread defined as longterm int - short term int
     df['fin_spread'] =df['CH_10int']-df['Saron_Rate']
@@ -383,6 +383,63 @@ def load_business_confidence_eu(file_path):
     B_Conf.columns =['Date', 'Business_Confidence_EU']
     return B_Conf.set_index('Date').resample('MS').asfreq()
 
+#-----------------------------
+#define lag shift function to shift according to publication date -> no data leakage for forecasting
+
+#make a configuration dictionary to define how many months to shift each variable
+LAG_CONFIG= {
+    #don't shift target
+    'cpi': 0,
+    #available start of next month (1. day of next month or end of month t -> Shift 1):
+    'oil_prices': 1, 'interest': 1, 'mortgages': 1, 'eu_interest': 1,'kof_barometer': 1, 'manufacturing_eu': 1, 
+    #available month + 2 (Shift 2): release date > 1st of next month implies we can't use it until the month after
+    'unemployment': 2, 'exchange': 2,  'vol_loans': 2, 'money_supply': 2, 'business_conf_eu': 2, 'interest_rates': 2, 'retail': 2,
+    #real turnover: constrained by slower variable (Turnover), but need 2 months for PPI as seperate variable
+    'turnover_ppi': {'PPI': 2,'real_turnover': 5},
+    #available month + 3 (Shift 3) 
+    'inflation_exp': 3,        
+    #quarterly data (Shift 5): all say around 45-60 days after quarter end, so shift 5 to be safe and consistent across all quarterly data (even if some are available a bit earlier)
+    'gdp_ch': 5, 'gdp_eu': 5,'wages': 5,              
+}
+
+
+def publication_lags(data_dict, lag_config):
+    """
+    applies time shifting to prevent data leakage"""
+    #initialize dictionary to store shifted data
+    shifted_dict= {}
+    #loop through each dataset and apply the appropriate shift based on the lag configuration
+    for name, df in data_dict.items():
+        if df is None:
+            continue            
+        #get lag to shift
+        config= lag_config.get(name)  
+
+        #if config is dictionary(for real turnover and ppi)
+        if isinstance(config, dict):
+            shifted_df=df.copy()            
+            for col in df.columns:
+                #check if specific column has a defined lag in the config
+                col_lag= config.get(col)
+                
+                #apply shift
+                shifted_df[col]= df[col].shift(col_lag)
+                print(f"Dataset '{name}' -> Col '{col}': Shifted {col_lag} months")  #want to check if shifted by correct months
+        
+        #if config is integer
+        else:
+            #treat as int
+            lag= int(config)
+            #shift
+            shifted_df= df.shift(lag)
+            print(f"Dataset '{name}': Shifted {lag} months")       
+        #apply shift
+        shifted_df=df.shift(lag)        
+        #store in new dictionary
+        shifted_dict[name] =shifted_df
+       
+    return shifted_dict
+
 #-----------------------------------
 
 #load all datasets through the above defined functions using pipeline logic
@@ -419,10 +476,14 @@ def load_all_data_parallel(file_path):
 
 def merge_all_data(data_dict):
     """Merge all loaded datasets into single data_before_split DataFrame"""
-    print("\n=== Merging all datasets ===")
-    
-    #start with CPI data
-    data_before_split =data_dict['cpi'].copy()
+    #apply shifting before merging to ensure no data leakage in final dataset
+    shifted_data_dict =publication_lags(data_dict, LAG_CONFIG)
+    #start with base datetime index (using CPI as anchor)
+    if 'cpi' in shifted_data_dict:
+        data_before_split= shifted_data_dict['cpi'].copy()
+    else:
+        #fallback if CPI fails
+        data_before_split= next(iter(shifted_data_dict.values())).copy()
     
     #define merge order 
     merge_order =['kof_barometer', 'unemployment', 'oil_prices', 'gdp_ch', 'gdp_eu','inflation_exp', 'interest', 'eu_interest', 'wages', 'turnover_ppi',
@@ -430,9 +491,8 @@ def merge_all_data(data_dict):
     
     #merge and verify all get merged
     for key in merge_order:
-        if data_dict[key] is not None:
-            data_before_split =pd.merge(data_before_split, data_dict[key], left_index=True, right_index=True, how='left')
-            print(f"Merged {key}")
+        if key in shifted_data_dict and shifted_data_dict[key] is not None:
+            data_before_split =pd.merge(data_before_split, shifted_data_dict[key], left_index=True, right_index=True, how='left')
         else:
             print(f"Skipped {key} (not loaded)")
     #print shape as 2. check
@@ -456,7 +516,7 @@ start_date ='2000-05-01'
 end_date='2025-04-01'
 df =data_before_split.loc[start_date:end_date]
 df.info()
-df.columns()
+df.columns
 
 #Core_CPI is an object-> coerce to float
 df['Core_CPI']=pd.to_numeric(df['Core_CPI'], errors='coerce') 
