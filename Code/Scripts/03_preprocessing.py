@@ -154,18 +154,12 @@ vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU', 'M3_chang
 #def scaler
 scaler=StandardScaler()
 #fit scale on training data only
-scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
+#scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
 #transform the data
-df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
+#df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
 #apply same transformation to your BVAR dataframe so they stay identical
-df_bvar[vars_to_scale] = scaler.transform(df_bvar[vars_to_scale])
+#df_bvar[vars_to_scale] = scaler.transform(df_bvar[vars_to_scale])
 
-
-#split to training and test to prevent look-ahead bias in scaling
-
-#only transform the specific columns that have large values
-df_stationary[vars_to_scale]= scaler.fit_transform(df_stationary[vars_to_scale])
-#df_bvar[vars_to_scale]= scaler.fit_transform(df_bvar[vars_to_scale])
 #recheck descriptive stats
 print(df_stationary.describe().T)
 
