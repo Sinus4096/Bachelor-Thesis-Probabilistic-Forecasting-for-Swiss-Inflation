@@ -21,57 +21,51 @@ class BVAR:
         
 
     def create_lags(self, data):
-        target_cols = [c for c in data.columns if 'target_' in c]
-        feature_cols = [c for c in data.columns if 'target_' not in c]
-        
-        Y_raw = data[target_cols].values
-        X_raw = data[feature_cols].values
-        
+        #get target and feature columns
+        target_cols= [c for c in data.columns if 'target_' in c]
+        feature_cols= [c for c in data.columns if 'target_' not in c]
+        #extract raw values
+        Y_raw=data[target_cols].values
+        X_raw= data[feature_cols].values
+        #get number of variables and observations
         self.n_vars = Y_raw.shape[1]
-        n_obs = len(data)
+        n_obs= len(data)
         
-        # Define the structure: lags 0, 1, and 12
-        self.lag_indices = [0, 1, 12]
-        max_lag = 12
-        
+        #define want lags 0, 1, 2, and 12
+        self.lag_indices =[0, 1, 2, 12]
+        max_lag= 12  #biggest lag
+        #if less obs than max lag +1 -> cannot create lagged features-> raise error
         if n_obs <= max_lag:
             raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires at least 13 observations.")
-
-        X_list = []
-        # REMOVED: The extra loops. We only need to build the list once.
+        #initialize list to store lagged features
+        X_list= []
+        #loop through lags and create lagged features
         for lag in self.lag_indices:
-            start = max_lag - lag
-            end = n_obs - lag
-            X_list.append(X_raw[start:end, :])
-
-        X_combined = np.column_stack(X_list)
-        
-        # Deduplication logic
-        df_temp = pd.DataFrame(X_combined)
-        is_duplicate = df_temp.T.duplicated().values
-        self.kept_indices = np.where(~is_duplicate)[0]
-        
-        # FIX: Apply kept_indices to X_combined BEFORE adding the intercept
-        X_unique = X_combined[:, self.kept_indices]
-        
-        # Add Intercept (Size will be: 1 + number of unique features)
-        # Based on your error, this should result in size 28
-        X = np.column_stack([np.ones(X_unique.shape[0]), X_unique])
-        
-        # Align Y: Y starts from max_lag to match the lag history
-        Y_aligned = Y_raw[max_lag:, :]
-        
-        self.n_features = X.shape[1]
+            start= max_lag -lag  #start point for this lag
+            end =n_obs- lag     #end point for this lag
+            X_list.append(X_raw[start:end, :])  #append lagged features to list
+        #combine lagged features
+        X_combined=np.column_stack(X_list)
+        #want to deduplicate if lags of different variables are the same
+        df_temp =pd.DataFrame(X_combined) 
+        is_duplicate= df_temp.T.duplicated().values  #boolean mask for duplicate columns
+        self.kept_indices= np.where(~is_duplicate)[0]   #store indices of unique features
+        #keep only unique features
+        X_unique =X_combined[:, self.kept_indices]
+        #add intercept based error
+        X =np.column_stack([np.ones(X_unique.shape[0]), X_unique])
+        #align Y: Y starts from max_lag to match the lag history
+        Y_aligned =Y_raw[max_lag:, :]        
+        self.n_features =X.shape[1]  #number of features after adding intercept and deduplication
         return X, Y_aligned
 
-    def minnesota_dummies(self, Y, a1, a2,a3, mu, sigmas): 
+    def minnesota_dummies(self, Y, a1, a2,a3, mu, sigmas_y, sigmas_x): 
         """creates dummy observations: minnesota beliefs into data rows"""
-        N = self.n_vars            # Number of target variables (i)
-        K = self.n_features        # Total features (intercept + lags*vars)
-        L = len(self.lag_indices)  # Number of lags
-        
-        # Calculate number of predictors (assuming X contains lags of all variables)
-        n_preds = (K - 1) // L 
+        N= self.n_vars     #nr target variables
+        K= self.n_features        #total features 
+        L= len(self.lag_indices)   #nr lags
+        #calc number of predictors
+        n_preds = (K - 1) //L 
         
         # 1. Prior for Lags (Section 1 in your Equation)
         n_dum_lags = K - 1
@@ -94,13 +88,13 @@ class BVAR:
                 # OWN LAGS (j == i): Variance = a1 / k^2 
                 # Dummy X = k * sigma_jj / sqrt(a1)
                 # Note: sigma_ii == sigma_jj here
-                xd_1[j_feat, col_idx] = (k_scale * sigmas[var_j_idx]) / np.sqrt(a1)
+                xd_1[j_feat, col_idx] = (k_scale * sigmas_x[var_j_idx]) / np.sqrt(a1)
             else:
                 # OTHER LAGS (j != i): Variance = (a2 * sigma_ii^2) / (k^2 * sigma_jj^2)
                 # Dummy X = (k * sigma_jj) / sqrt(a2)
                 # This follows your formula: x = sigma_ii / sqrt(variance)
                 # We use the average sigma or the corresponding sigma for scaling
-                s_jj = sigmas[var_j_idx] if var_j_idx < len(sigmas) else np.mean(sigmas)
+                s_jj = sigmas_x[var_j_idx] if var_j_idx < len(sigmas_x) else np.mean(sigmas_x)
                 xd_1[j_feat, col_idx] = (k_scale * s_jj) / np.sqrt(a2)
 
         # 2. Intercept Prior (Equation 3: a3 * sigma_ii^2)
@@ -111,7 +105,7 @@ class BVAR:
         
         # 3. Sigma Prior (Standard Inverse Wishart scaling)
         # This matches the 'fixed Σ' logic in your text
-        yd_sig = np.diag(sigmas)
+        yd_sig = np.diag(sigmas_y)
         xd_sig = np.zeros((N, K))
         
         X_dum = np.vstack([xd_1, xd_2, xd_sig])
@@ -183,27 +177,28 @@ class BVAR:
  
     
 
-    def log_ml_natural(self, log_lambda, X, Y, a3, sigmas):
+    def log_ml_natural(self, log_lambda, X, Y, a3, sigmas, sigmas_x):
         """compute log marginal likelihood for natural niw prior"""
         #define parameters
         lam= np.exp(log_lambda)
         T, N=Y.shape  #get dimensions
-        #prior based on lambda
-        Phi_0, Psi_0= self.natural_moments(N, lam, a3, sigmas)
-        Psi_0_inv= np.diag(1.0/np.diag(Psi_0))  #inverse-> prior covariance of coeffs
+        K = self.n_features
+        #get prior based on lambda
+        Phi_0, Psi_0= self.natural_moments(N, lam, a3, sigmas, sigmas_x)
+        Psi_0_inv= np.diag(1.0/np.diag(Psi_0))  #work with precision (inverse) for stability
         #posterior parameters
         XX= X.T @X
         Psi_post_inv= Psi_0_inv +XX  #posterior precision
-        #determinants
-        log_det_Psi_0_inv= np.sum(np.log(np.diag(Psi_0_inv)))
-        #log determinant of posterior precision
-        L_post_inv= np.linalg.cholesky(Psi_post_inv)
-        log_det_Psi_post_inv= 2.0*np.sum(np.log(np.diag(L_post_inv)))
+        #log determinants for psi
+        L_post_inv= np.linalg.cholesky(Psi_post_inv)     
+        log_det_Psi_post_inv= -2.0*np.sum(np.log(np.diag(L_post_inv)))
+        log_det_Psi_0= np.sum(np.log(np.diag(Psi_0)))
+        log_det_Psi_post = -log_det_Psi_post_inv #since Psi_post is inverse of Psi_post_inv
         #posterior mean
-        Phi_post=np.linalg.solve(Psi_post_inv, (Psi_0_inv @Phi_0 +X.T @Y))
+        rhs= Psi_0_inv @Phi_0+X.T@ Y  #right-hand side of posterior mean formula
+        Phi_post= np.linalg.solve(Psi_post_inv, rhs)    
         #prior scale matrix
         S_0= np.diag(sigmas**2)
-
         #get posterior scale matrix via helpers
         term_data= Y.T @Y  
         term_prior= Phi_0.T @ Psi_0_inv @Phi_0
@@ -217,11 +212,46 @@ class BVAR:
         #log determinant of S_post
         sign, log_det_S_post= np.linalg.slogdet(S_post)
         #compute log marginal likelihood
-        term_cov=(N/2.0)*(log_det_Psi_0_inv -log_det_Psi_post_inv)
-        term_scale= (nu_0/2.0)*log_det_S_0-(nu_post/2.0)*log_det_S_post
+        term_cov=(N/2.0)*(log_det_Psi_post - log_det_Psi_0)  #covariance terms from prior and posterior
+        term_scale= (nu_0/2.0)*log_det_S_0-(nu_post/2.0)*log_det_S_post  #scale terms from prior and posterior  
         const_gamma=special.multigammaln(nu_post/2.0, N)- special.multigammaln(nu_0/2.0, N)  #gamma function terms
         log_ml= term_cov +term_scale + const_gamma- (T*N/2.0)*np.log(np.pi)
         return log_ml
+    
+    def natural_moments(self, N, lam, a3, sigmas_y, sigmas_x):
+        """ constructs prior moments for natural conjugate normal-inverse wishart prior"""
+        #get dimensions
+        K= self.n_features
+        L= len(self.lag_indices)
+        n_preds=(K- 1)//L   #number of predictors per lag        
+        #prior mean: identity for first own-lag, zeros otherwise
+        Phi_0= np.zeros((K, N))         
+        #prior tightness matrix
+        psi_diag =np.zeros(K)        
+        #intercept
+        psi_diag[0]= a3  
+        #loop through lag blocks and variables to set tightness and prior mean       
+        for j in range(len(sigmas_x)):
+            col_idx = j + 1 # +1 for intercept
+            
+            # Find which lag this column belongs to (for the k^2 penalty)
+            # (Assuming your X_combined order was Lag 0, then Lag 1...)
+            n_preds_raw = len(sigmas_x) // len(self.lag_indices) 
+            lag_idx = j // n_preds_raw
+            k = max(self.lag_indices[lag_idx], 1)
+            
+            # Use the specific sigma for this feature
+            s_jj = sigmas_x[j]
+            
+            # Prior Variance (Tightness)
+            # Formula: lam^2 / (k^2 * sigma_j^2)
+            psi_diag[col_idx] = (lam**2) / ((k**2) * (s_jj**2))
+            
+            # Optional: Set Prior Mean to 1.0 for own-lag 0 if needed
+            # This requires checking if the variable name matches
+            # Phi_0[col_idx, var_idx] = 1.0 
+
+        return Phi_0, np.diag(psi_diag)
 
 
     def fit(self, data,n_draws=2000, burn_in=500):
@@ -237,10 +267,24 @@ class BVAR:
         sigmas=[]  #to store scales
         for idx in range(N):
             #fit univariate AR to get residual std
-            res = np.diff(Y[:, idx])
+            res= np.diff(Y[:, idx])
             sigmas.append(np.std(res) if len(res)>0 else 0.1)
-        sigmas = np.array(sigmas)
+        sigmas= np.array(sigmas)
+        # 2. Calculate Sigmas for the RAW X variables 
+        # (Extract feature columns before they were lagged)
+        feature_cols = [c for c in data.columns if 'target_' not in c]
+        X_raw_data = data[feature_cols].values
         
+        sigmas_x_raw = []
+        for idx in range(X_raw_data.shape[1]):
+            res = np.diff(X_raw_data[:, idx])
+            sigmas_x_raw.append(np.std(res) if len(res) > 0 else 0.1)
+        sigmas_x_raw = np.array(sigmas_x_raw)
+        L = len(self.lag_indices)
+        sigmas_x_tiled = np.tile(sigmas_x_raw, L) 
+        
+        # Apply the same deduplication mask used in create_lags
+        sigmas_x = sigmas_x_tiled[self.kept_indices]
         #Minnesota config
         #-----------------
         if 'minnesota' in self.prior_type:
@@ -374,28 +418,22 @@ class BVAR:
         # Natural Conjugate Normal-Wishart Prior
         # -------------------------------------
         elif 'natural_niw' in self.prior_type:
-            #def default params
-            a1=self.params.get('lambda', 0.1)
-            a2= self.params.get('theta', 0.1)    
+            #def default params  
             mu= self.params.get('mu', 1.0)
             a3= self.params.get('alpha', 100.0)
-            #glp optimization->best lambda (optional)
-            #hyperparameter optimization for lambda/a1
-            #res=optimize.minimize_scalar(lambda loglam: -self.log_ml_natural(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
-            #a1=np.exp(res.x)  #optimal lambda
-            #calc residual scaling from univariate ARs
-            sigmas=[]  #to store scales
-            for idx in range(N):
-                #fit univariate AR to get residual std
-                res=np.diff(Y[:, idx])
-                sigmas.append(np.std(res) if len(res)>0 else 0.1)
-            sigmas= np.array(sigmas)  #convert to array
+            #want to find best lambda=a1=a2 by maximing log marginal likelihood
+            objective= lambda log_lam: -self.log_ml_natural(log_lam, X, Y, a3, sigmas, sigmas_x)  #objective to minimize (negative log marginal likelihood)
+            res=optimize.minimize_scalar(objective, bounds=(-2.0, 0.0), method='bounded')      #search for best lambda in log-space
+            best_lambda= np.exp(res.x)  #optimal lambda
+            #set a1 and a2 to  the same optimized value
+            a1= best_lambda
+            a2= best_lambda       
 
             #posterior if dummies used for posterior estimation
             if self.implementation_type== 'dummies':
 
                 #get dummy obs
-                X_dum, Y_dum= self.minnesota_dummies(Y, a1, a2,a3, mu, sigmas)
+                X_dum, Y_dum= self.minnesota_dummies(Y, a1, a2,a3, mu, sigmas, sigmas_x)
                 #augment data: instead of making giant cov matrix-> add rows to data
                 Y_star=np.vstack([Y_dum, Y])
                 X_star=np.vstack([X_dum, X])
@@ -417,7 +455,7 @@ class BVAR:
             
             elif self.implementation_type== 'analytical':
                 #priors; Psi is relative tightness matrix
-                Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas)
+                Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas,sigmas_x)
                 Psi_0_inv=np.diag(1.0/np.diag(Psi_0))              
                 #prior scale matrix
                 S_0 =np.diag(sigmas**2)
@@ -457,35 +495,29 @@ class BVAR:
         return self
     
     def forecast(self, data):
-        # 1. Extract only the predictor columns (match create_lags logic)
-        feature_cols = [c for c in data.columns if 'target_' not in c]
-        X_raw = data[feature_cols].values
-        
-        lags = []
-        n_obs = X_raw.shape[0]
-        
-        # 2. Extract current values and lags 1 and 12
-        # Data must contain rows [t, t-1, ... t-12] (13 total)
+        #extract only the predictor columns for create lags logic
+        feature_cols= [c for c in data.columns if 'target_' not in c]
+        X_raw= data[feature_cols].values
+        #initialize list to store lagged values
+        lags= []
+        n_obs= X_raw.shape[0] #number of observations in the input data
+        #extract current values and lags
         for lag in self.lag_indices:
-            idx = n_obs - lag - 1 
+            idx= n_obs- lag-1   #index to extract the correct lagged value
             lags.append(X_raw[idx, :])
-
-        # Combine into a single horizontal vector
-        X_combined = np.concatenate(lags)
-        
-        # 3. Apply the EXACT same deduplication used during training
-        X_unique = X_combined[self.kept_indices]
-        
-        # 4. Add the intercept
-        x_t = np.concatenate([[1.0], X_unique])
-        
-        # Now x_t size should be 28, matching phi_draws
-        n_draws = self.phi_draws.shape[0]
-        preds=np.zeros((n_draws, self.n_vars))
-        
+        #combine into 1 horizontal vector
+        X_combined=np.concatenate(lags)
+        #apply same deduplication used during training
+        X_unique= X_combined[self.kept_indices]
+        #add intercept
+        x_t =np.concatenate([[1.0], X_unique])
+        # -> x_t size should be 28, matching phi_draws
+        n_draws= self.phi_draws.shape[0]  #number of posterior draws
+        preds=np.zeros((n_draws, self.n_vars))  #to store predictions for each draw
+        #loop through draws to generate predictive distribution
         for i in range(n_draws):
-            noise = np.random.multivariate_normal(np.zeros(self.n_vars), self.sigma_draws[i])
-            # Matrix multiplication will now succeed: (28) @ (28, n_vars)
-            preds[i, :] = x_t @ self.phi_draws[i] + noise
+            noise=np.random.multivariate_normal(np.zeros(self.n_vars), self.sigma_draws[i])  #noise from current sigma draw
+            #matrix multiplication to get mean prediction + add noise for uncertainty
+            preds[i, :]= x_t@self.phi_draws[i]+ noise
             
         return preds

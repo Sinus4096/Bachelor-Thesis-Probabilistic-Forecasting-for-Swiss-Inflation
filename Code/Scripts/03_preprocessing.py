@@ -95,7 +95,7 @@ print(df_stationary.tail())
 #-----------------------------
 df_bvar=df_stationary.copy()
 #drop lagged variables and cycle features
-lagged_cols=[col for col in df_bvar.columns if 'cycle_' in col or 'lag_' in col]  #leave autoregressive features so bvar can make lags based on them
+lagged_cols=[col for col in df_bvar.columns if 'lag_' in col]  #leave autoregressive features so bvar can make lags based on them
 df_bvar.drop(columns=lagged_cols, inplace=True)
 
 #for bvar will leave NA for now and start training later as 12. lag will be created by the model itself-> set start date to latest
@@ -123,10 +123,10 @@ print(rows_with_nan)
 #->NA lags are as expected in the first two rows-> set start date later to avoid crash of qrf
 #do not drop NA's of targets later here: their availability depends on the forecast horizon
 #as will evaluate using yoy inflation dropping later won't make a change
-#set start date as last available date of predictors +1 year as bvar will have to create a 12 month lag for it too
+#set start date as last available date of predictors +2months year as bvar will have to create a 2 month lag for it too
 base_date=df_stationary['infl_e_current_year'].first_valid_index()
-#add 1 year to that date 
-start_date= base_date+pd.DateOffset(years=1)
+#add 2 months to that date 
+start_date= base_date+pd.DateOffset(months=3)
 df_stationary= df_stationary.loc[start_date:] 
 #recheck
 rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
@@ -142,23 +142,27 @@ print(df_stationary.describe().T)
 #----------------------
 #standardize features
 # --------------------------------
-#for feature importance of qrf and for ridge regression need to standardize the features but not the targets because want to keep them
+#for feature importance of qrf and for bvar generallyneed to standardize the features but not the targets because want to keep them
 #in original units for evaluation later on
 
 #need to standardize based on data we have available: meaning based on training data to prevent look-ahead bias
 #define split date
-test_start_date= '2013-07-01'
+test_start_date= '2012-10-01'
+#define exclusion criteria: dont want to standardize targets 
+vars_to_scale =[col for col in df_stationary.columns if 'target' not in col]
+vars_to_scale_bvar=[col for col in df_bvar.columns if 'target' not in col]  
 
-#large absolute variables that were not log differenced and could cause issues for qrf-> standardize them
-vars_to_scale= ['oilprices', 'kofbarometer', 'Business_Confidence_EU', 'M3_change', 'M2_change', 'M1_change']
 #def scaler
 scaler=StandardScaler()
 #fit scale on training data only
-#scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
+scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
 #transform the data
-#df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
-#apply same transformation to your BVAR dataframe so they stay identical
-#df_bvar[vars_to_scale] = scaler.transform(df_bvar[vars_to_scale])
+df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
+#new scaler for BVAR dataframe 
+scaler_bvar= StandardScaler()
+#fit only on BVAR training data 
+scaler_bvar.fit(df_bvar.loc[:test_start_date].iloc[:-1][vars_to_scale_bvar])
+df_bvar[vars_to_scale_bvar]= scaler_bvar.transform(df_bvar[vars_to_scale_bvar])
 
 #recheck descriptive stats
 print(df_stationary.describe().T)

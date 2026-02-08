@@ -82,8 +82,11 @@ def run_experiment(config):
             #get date
             forecast_date= df_system.index[current_idx]
             target_date=forecast_date+pd.DateOffset(months=h)
-            
-            #skip if not a forecast month
+            #skip if not a training and forecasting month 
+            if forecast_date.month not in snb_months:
+                current_idx += 1
+                continue
+            #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
             if target_date not in df_yoy.index:
                 current_idx+= 1
                 continue
@@ -98,33 +101,33 @@ def run_experiment(config):
             #forecast
             preds_draws_all=model.forecast(X_test)
             #restribt evalluation to quarterly
-            if forecast_date.month in snb_months:
-                #iterate through all target variables& extract results
-                for i, var_name in enumerate(target_names):
-                    #preds draws made corresnponding to current target col
-                    preds_draws=preds_draws_all[:, i]
+            
+            #iterate through all target variables& extract results
+            for i, var_name in enumerate(target_names):
+                #preds draws made corresnponding to current target col
+                preds_draws=preds_draws_all[:, i]
                         
-                    #get actual yoy value
-                    actual_yoy=df_yoy.loc[target_date, var_name]
-                    #to calc price levels need levelsof core and headline cpi
-                    raw_col= f"{var_name}_level"
-                    #direct forecast evaluation: if h==12 can evaluate directly
-                    if h==12:
-                        preds_draws_yoy=preds_draws
-                    else:
-                        #for h<12: combine history with deannualized model predictions
-                        months_back=12- h#need the change from t-(12-h) to t
-                        history_date= forecast_date-pd.DateOffset(months=months_back)
+                #get actual yoy value
+                actual_yoy=df_yoy.loc[target_date, var_name]
+                #to calc price levels need levelsof core and headline cpi
+                raw_col= f"{var_name}_level"
+                #direct forecast evaluation: if h==12 can evaluate directly
+                if h==12:
+                    preds_draws_yoy=preds_draws
+                else:
+                    #for h<12: combine history with deannualized model predictions
+                    months_back=12- h#need the change from t-(12-h) to t
+                    history_date= forecast_date-pd.DateOffset(months=months_back)
 
-                        if history_date not in df_yoy.index:
-                            continue  #skip if not enough history to deannualize
-                        #calc log price levels
-                        p_t= np.log(df_yoy.loc[forecast_date, raw_col])
-                        p_hist= np.log(df_yoy.loc[history_date, raw_col])   
-                        #deannualize model preds
-                        base_effect= (p_t-p_hist)*100
-                        scaling_factor= h/12
-                        preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
+                    if history_date not in df_yoy.index:
+                        continue  #skip if not enough history to deannualize
+                    #calc log price levels
+                    p_t= np.log(df_yoy.loc[forecast_date, raw_col])
+                    p_hist= np.log(df_yoy.loc[history_date, raw_col])   
+                    #deannualize model preds
+                    base_effect= (p_t-p_hist)*100
+                    scaling_factor= h/12
+                    preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
 
                             
                     #calc CRPS

@@ -7,7 +7,7 @@ import os
 # --- CONFIGURATION ---
 base_path = 'Code/Results/Data_experiments_benchmark'
 data_type = 'Headline' 
-models = ['ARGARCH', 'BVAR', 'QRF']  # Add your 3 models here
+models = ['ARGARCH', 'BVAR', 'QRF_Default_Res_']  # Add your 3 models here
 horizons = [3, 6, 9, 12]
 rolling_window = 12 # 3 years if quarterly
 

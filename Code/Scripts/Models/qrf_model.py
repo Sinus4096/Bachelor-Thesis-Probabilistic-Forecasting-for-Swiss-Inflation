@@ -155,10 +155,7 @@ def run_experiment(config):
 
                 #if configured to use residual forecasting
                 if use_residuals:
-                    #scale Data 
-                    scaler= StandardScaler()
-                    X_train_scaled=scaler.fit_transform(X_train)
-                    X_test_scaled= scaler.transform(X_test)
+                    #data already scaled in preprocessing 
                     #define rolling window for structural breaks: 5y=60months
                     window_size=60
                     #ensure we have enough data for splits, else reduce splits
@@ -169,33 +166,28 @@ def run_experiment(config):
                         #grid search for best alpha
                         ridge_params= {'alpha': [0.1, 1.0, 10.0, 50.0, 100.0, 500.0]}
                         grid_search = GridSearchCV(Ridge(),ridge_params,cv=tscv_rolling,scoring='neg_mean_squared_error',n_jobs=-1)
-                        # Even if CV selects the best alpha, we shouldn't fit on 
-                        # data from 20 years ago if there is a break.
-                        # We limit the training data to the rolling window for the fit.
-                        if len(X_train_scaled) > window_size:
-                            X_train_recent = X_train_scaled[-window_size:]
-                            Y_train_recent = Y_train.iloc[-window_size:]
+                        #CV-> best alpha but shouldn't fit on data from 20 years ago if there is a break
+                        #->limit the training data to the rolling window for the fit
+                        if len(X_train)> window_size:
+                            X_train= X_train[-window_size:]
+                            Y_train_recent= Y_train.iloc[-window_size:]
                         else:
-                            X_train_recent = X_train_scaled
-                            Y_train_recent = Y_train
+                            X_train_recent= X_train
+                            Y_train_recent=Y_train
                     
-                        # Fit grid on recent data (or full, but CV logic dictates preference)
-                        # Actually, typically we fit Grid on recent data to find Alpha
+                        #fit grid on recent data (
                         grid_search.fit(X_train_recent, Y_train_recent)
-                        best_ridge = grid_search.best_estimator_
-                        
+                        best_ridge = grid_search.best_estimator_                        
                     else:
-                        # Fallback if too little data for CV
-                        best_ridge = Ridge(alpha=1.0)
-                        best_ridge.fit(X_train_scaled, Y_train)
+                        #fallback if too little data for CV: just take default alpha and fit on all data
+                        best_ridge= Ridge(alpha=1.0)
+                        best_ridge.fit(X_train, Y_train)
 
-                    # 3. Predict Residuals
-                    # Train residuals (in-sample) - Apply model to full history for QRF
-                    train_linear_preds = best_ridge.predict(X_train_scaled)
-                    Y_train_effective = Y_train - train_linear_preds
-                    
-                    # Test prediction (linear part)
-                    test_linear_preds = best_ridge.predict(X_test_scaled)
+                    #train residuals (in-sample) & apply model to full history for QRF
+                    train_linear_preds= best_ridge.predict(X_train)
+                    Y_train_effective= Y_train -train_linear_preds                    
+                    #test preds
+                    test_linear_preds=best_ridge.predict(X_test)
                     
                 else: #normal qrf forecasting
                     Y_train_effective= Y_train
