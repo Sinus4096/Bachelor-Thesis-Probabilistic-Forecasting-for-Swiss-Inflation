@@ -11,7 +11,7 @@ current_dir=Path(__file__).resolve().parent
 scripts_root = current_dir.parent.parent   
 sys.path.insert(0, str(scripts_root))
 from Scripts.Utils.density_fitting import fit_skew_t
-from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse 
+from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse, shap_values
 
 
 
@@ -140,6 +140,8 @@ def run_experiment():
                 if h==12:
                     mu_yoy=mu_pred
                     sigma_yoy= sigma_pred
+                    base_effect=0.0
+                    scaling_factor=1.0
                 else:
                     #get history date for base effect
                     months_back=12-h    #months to go back for base effect
@@ -161,9 +163,21 @@ def run_experiment():
                 #reconstrunct quantiles to yoy
                 preds_plot_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(plot_qunat, dist_params)
                 preds_dense_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(dense_quant, dist_params)
-                               
+
+                #shapley values: need params
+                const_val=model_res.params.get('Const', 0)  #get constant
+                mean_params={k: v for k, v in model_res.params.items() if 'y[' in k}  #extract AR coefficients
+                #call fct for shap values
+                shap_dict=shap_values(model_obj=None, X_input=y_train, model_type='linear', linear_coeffs=mean_params, linear_const=const_val)
+                #initialize dict to store shap values
+                final_shap = {}
+                #apply scaling logic to shap results  
+                final_shap['Shap_Base_Effect'] =base_effect #add base effect
+                #scale output
+                for k, v in shap_dict.items():
+                    final_shap[k] =v* scaling_factor
                 #get rmse of meadian forecast
-                sq_error = calculate_rmse(actual_val, preds_plot_yoy[2]) 
+                sq_error =calculate_rmse(actual_val, preds_plot_yoy[2]) 
                 #use skew t to fit data for parametric crps eval
                 y_fit_data=preds_dense_yoy.flatten() #data to fit
                 skew_params=fit_skew_t(y_fit_data, dense_quant)
@@ -179,6 +193,8 @@ def run_experiment():
                     'q05': preds_plot_yoy[0], 'q16': preds_plot_yoy[1], 'q84': preds_plot_yoy[3], 'q95': preds_plot_yoy[4], 'Squared_Error': sq_error,
                     'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': param_crps, 'PIT': pit_val, 'df_skewt': skew_params[0], 'nc_skewt': skew_params[1], 
                     'loc_skewt': skew_params[2], 'scale_skewt': skew_params[3]}
+                #add Shapley values to the result dictionary 
+                result.update(final_shap)
                 #append to recursive preds
                 recursive_preds.append(result)
                 #to next window

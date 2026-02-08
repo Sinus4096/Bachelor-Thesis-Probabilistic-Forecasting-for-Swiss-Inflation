@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.stats import nct
 from scipy.integrate import quad
-import pymetalog as pm
-
+import shap
+import pandas as pd
 #approximation of crps for hyperparameter tuning in qrf-> evaluation of quantile predictions
 #-----------------------------
 def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):
@@ -64,42 +64,6 @@ def calculate_crps(y_true, params):
 
 
 
-def calculate_crps_metalog(y_true, metalog_model, quantiles, term=5):
-    """
-    Calculates CRPS with error handling for pymetalog's numerical instability.
-    """
-    from scipy.integrate import quad
-    import numpy as np
-    import pymetalog as pm
-
-    # Use the predicted quantiles to define a tighter integration range
-    # Metalog is unstable in far tails; 20% buffer is safer than 50%
-    q_min, q_max = np.min(quantiles), np.max(quantiles)
-    spread = q_max - q_min
-    lower_lim = q_min - (spread * 0.2)
-    upper_lim = q_max + (spread * 0.2)
-    median_val = np.median(quantiles)
-
-    def integrand(x):
-        try:
-            # Attempt to get CDF from the library
-            res = pm.pmetalog(metalog_model, q=[float(x)], term=term)
-            
-            # If library returns empty list or NaN, fallback to step function
-            if res is None or len(res) == 0 or np.isnan(res[0]):
-                cdf_val = 0.0 if x < median_val else 1.0
-            else:
-                cdf_val = np.clip(float(res[0]), 0, 1)
-        except:
-            # Emergency fallback for numerical crashes
-            cdf_val = 0.0 if x < median_val else 1.0
-            
-        heaviside = 1.0 if x >= y_true else 0.0
-        return (cdf_val - heaviside)**2
-
-    # Numerical integration with a tighter tolerance to speed up
-    crps_val, _ = quad(integrand, lower_lim, upper_lim, limit=50, epsabs=1e-4)
-    return crps_val
 
 #3.RMSE to compare their point forecast accuracy
 #-----------------------------
@@ -124,3 +88,59 @@ def calculate_empirical_crps(y_true, y_preds, quantiles):
     diff=y_true -y_preds
     loss= np.where(diff>= 0, diff*quantiles, -diff *(1-quantiles))
     return 2*np.mean(loss)
+
+
+
+
+
+
+def shap_values(model_obj, X_input, model_type='linear', linear_coeffs=None, linear_const=0.0):
+    """ calculate Shapley values need to differentiate between linear and non linear models
+    -> linear models: Exact Calculation (Coefficients*Values) because it is faster and mathematically precise
+     ->QRF: shap (=an approximation) """
+    #initialize dict to store contributions
+    shap_contributions = {}
+
+    #Tree-Based Models (QRF)
+    #-------------------------------------------------------
+    if model_type== 'tree':
+        #check dimensionality of input
+        if isinstance(X_input, pd.Series):
+            X_input_df= X_input.to_frame().T  #if Series, convert to single-row DataFrame
+        else:
+            X_input_df= X_input            
+        #initialize TreeExplainer (optimized for Random Forests)
+        explainer= shap.TreeExplainer(model_obj)        
+        #calc SHAP values
+        shap_vals=explainer.shap_values(X_input_df)
+        #handle shape differences in shap library versions (debug)
+        if isinstance(shap_vals, list):
+            vals= shap_vals[0]  #if list, take the first element
+        else:
+            vals= shap_vals
+
+        #map back to feature names
+        for i, col in enumerate(X_input_df.columns):
+            shap_contributions[f'Shap_{col}']=vals[0][i]
+        #TreeExplainer expected_value is average forecast of dataset
+        shap_contributions['Shap_Constant']= explainer.expected_value if not isinstance(explainer.expected_value, np.ndarray) else explainer.expected_value[0]
+
+
+    #Linear Models (AR-GARCH, BVAR)
+    #---------------------------------------------------
+    elif model_type =='linear':
+        #loop through coefficients and multiply by input values
+        for feature_name, coef_val in linear_coeffs.items():
+            #X_input is a Series with matching index (e.g., BVAR with named lags)
+            if feature_name in X_input.index:
+                val =X_input[feature_name]    #find mathcing value in input data
+                shap_contributions[f'Shap_{feature_name}'] =coef_val*val  #calc shap value as Coefficients*Values
+            #AR-GARCH style (arch package uses "y[1]", "y[2]")
+            elif 'y[' in feature_name:
+                lag_idx=int(feature_name.split('[')[1].split(']')[0])
+                # X_input is sorted chronologically, y[1] is the last item
+                val=X_input.iloc[-lag_idx] 
+                shap_contributions[f'Shap_Lag_{lag_idx}']= coef_val*val  #calc shap value as Coefficients*Values
+        #add constant term contribution           
+        shap_contributions['Shap_Constant'] =linear_const
+    return shap_contributions

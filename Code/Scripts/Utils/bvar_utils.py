@@ -65,51 +65,40 @@ class BVAR:
         K= self.n_features        #total features 
         L= len(self.lag_indices)   #nr lags
         #calc number of predictors
-        n_preds = (K - 1) //L 
-        
-        # 1. Prior for Lags (Section 1 in your Equation)
-        n_dum_lags = K - 1
-        yd_1 = np.zeros((n_dum_lags, N))
-        xd_1 = np.zeros((n_dum_lags, K))
-        
+        n_preds= (K- 1) //L         
+        #prior for Lags 
+        n_dum_lags= K-1   #number of lagged dummy features
+        yd_1= np.zeros((n_dum_lags, N))  #prior mean is zero for all lagged features
+        xd_1= np.zeros((n_dum_lags, K))  #dummy features for lag priors
+        #loop through lagged features to set dummy values based on minnesota logic
         for j_feat in range(n_dum_lags):
-            # Identify which lag (k) and which predictor variable (j)
-            lag_pos = j_feat // n_preds
-            var_j_idx = j_feat % n_preds
+            #identify which lag and which predictor variable this feature corresponds to
+            lag_pos=j_feat //n_preds  #lag position (0 for lag 0, 1 for lag 1, etc.)
+            var_j_idx= j_feat %n_preds     #var index
+            #get scaling factor for this lag based on minnesota formula
+            k =self.lag_indices[lag_pos]
+            k_scale= max(k, 1) #treat lag 0 as 1 for scaling to avoid div by zero
+        
+            col_idx =j_feat +1 #col index in dummy X (offset by 1 for intercept)
             
-            k = self.lag_indices[lag_pos]
-            k_scale = max(k, 1) # Treat lag 0 as 1 for scaling to avoid div by zero
-            
-            col_idx = j_feat + 1 # +1 because index 0 is intercept
-            
-            # We create a dummy for each target equation i
-            # In a standard BVAR dummy setup, we simplify this to one block:
+            #create dummy for each equation 
             if var_j_idx < N:
-                # OWN LAGS (j == i): Variance = a1 / k^2 
-                # Dummy X = k * sigma_jj / sqrt(a1)
-                # Note: sigma_ii == sigma_jj here
-                xd_1[j_feat, col_idx] = (k_scale * sigmas_x[var_j_idx]) / np.sqrt(a1)
+                # own lags i==j
+                xd_1[j_feat, col_idx]= (k_scale*sigmas_x[var_j_idx]) /np.sqrt(a1)
             else:
-                # OTHER LAGS (j != i): Variance = (a2 * sigma_ii^2) / (k^2 * sigma_jj^2)
-                # Dummy X = (k * sigma_jj) / sqrt(a2)
-                # This follows your formula: x = sigma_ii / sqrt(variance)
-                # We use the average sigma or the corresponding sigma for scaling
+                #other lags:use the avg sigma or the corresponding sigma for scaling
                 s_jj = sigmas_x[var_j_idx] if var_j_idx < len(sigmas_x) else np.mean(sigmas_x)
                 xd_1[j_feat, col_idx] = (k_scale * s_jj) / np.sqrt(a2)
-
-        # 2. Intercept Prior (Equation 3: a3 * sigma_ii^2)
-        # Dummy X = sigma_ii / sqrt(a3 * sigma_ii^2) = 1 / sqrt(a3)
-        xd_2 = np.zeros((1, K))
-        xd_2[0, 0] = 1.0 / np.sqrt(a3)
-        yd_2 = np.zeros((1, N))
-        
-        # 3. Sigma Prior (Standard Inverse Wishart scaling)
-        # This matches the 'fixed Σ' logic in your text
-        yd_sig = np.diag(sigmas_y)
-        xd_sig = np.zeros((N, K))
-        
-        X_dum = np.vstack([xd_1, xd_2, xd_sig])
-        Y_dum = np.vstack([yd_1, yd_2, yd_sig])
+        #prior for intercepts
+        xd_2 =np.zeros((1, K))  #intercept dummy features
+        xd_2[0, 0]= 1.0/np.sqrt(a3)  #prior tightness for intercepts
+        yd_2= np.zeros((1, N))     #prior mean for intercepts (zero)        
+        #sigma prior
+        yd_sig=np.diag(sigmas_y)
+        xd_sig= np.zeros((N, K))
+        #combine all dummies by stacking vertically
+        X_dum =np.vstack([xd_1, xd_2, xd_sig])
+        Y_dum=np.vstack([yd_1, yd_2, yd_sig])
         
         return X_dum, Y_dum
 
@@ -234,9 +223,8 @@ class BVAR:
         for j in range(len(sigmas_x)):
             col_idx = j + 1 # +1 for intercept
             
-            # Find which lag this column belongs to (for the k^2 penalty)
-            # (Assuming your X_combined order was Lag 0, then Lag 1...)
-            n_preds_raw = len(sigmas_x) // len(self.lag_indices) 
+            #find which lag this column belongs to 
+            n_preds_raw= len(sigmas_x) // len(self.lag_indices) 
             lag_idx = j // n_preds_raw
             k = max(self.lag_indices[lag_idx], 1)
             

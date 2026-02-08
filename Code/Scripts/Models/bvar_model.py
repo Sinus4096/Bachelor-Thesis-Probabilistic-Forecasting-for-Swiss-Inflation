@@ -130,25 +130,25 @@ def run_experiment(config):
                     preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
 
                             
-                    #calc CRPS
-                    eval_quantiles= np.linspace(0.01, 0.99, 99)
-                    #bvar gives draws so we calc quantiles for the fit
-                    y_fit_quantiles= np.percentile(preds_draws_yoy, eval_quantiles*100)
-                    #fit skew-t to the draws
-                    skew_params= fit_skew_t(y_fit_quantiles, eval_quantiles)
-                    #empirical crps via quantiles
-                    empirical_crps = calculate_crps_quantile(actual_yoy, y_fit_quantiles[None, :], eval_quantiles)
-                    if hasattr(empirical_crps, '__iter__'): empirical_crps=np.mean(empirical_crps)   #if has multiple values average them
-                    #skew-t crps
-                    parametric_crps= calculate_crps(actual_yoy, skew_params)
-                    #PIT value
-                    pit_value= stats.nct.cdf(actual_yoy, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                    #RMSE 
-                    median= np.median(preds_draws_yoy) #get median forecast
-                    rmse= calculate_rmse(actual_yoy, median)
-                    
-                    #store result to specific target list
-                    results_storage[var_name].append({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
+                #calc CRPS
+                eval_quantiles= np.linspace(0.01, 0.99, 99)
+                #bvar gives draws so we calc quantiles for the fit
+                y_fit_quantiles= np.percentile(preds_draws_yoy, eval_quantiles*100)
+                #fit skew-t to the draws
+                skew_params= fit_skew_t(y_fit_quantiles, eval_quantiles)
+                #empirical crps via quantiles
+                empirical_crps = calculate_crps_quantile(actual_yoy, y_fit_quantiles[None, :], eval_quantiles)
+                if hasattr(empirical_crps, '__iter__'): empirical_crps=np.mean(empirical_crps)   #if has multiple values average them
+                #skew-t crps
+                parametric_crps= calculate_crps(actual_yoy, skew_params)
+                #PIT value
+                pit_value= stats.nct.cdf(actual_yoy, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                #RMSE 
+                median= np.median(preds_draws_yoy) #get median forecast
+                rmse= calculate_rmse(actual_yoy, median)
+                
+                #store result to specific target list
+                results_storage[var_name].append({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
                                                     'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
                                                     'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
                                                     'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
