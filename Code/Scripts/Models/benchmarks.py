@@ -59,7 +59,7 @@ def run_experiment():
     targets=["Headline", "Core"]  
     retrain_step_months= 3       #re-estimate model every quarter 
     horizons= [3, 6, 9, 12]  #define all horizons
-    eval_start_date= "2012-10-01" #start out of sample eval
+    eval_start_date= "2013-07-01" #start out of sample eval
     #snb forecasts once per quarter: in march, june, september, december
     snb_months=[3, 6, 9, 12]
     #define quantiles (for plotting vs crps calc)
@@ -99,13 +99,21 @@ def run_experiment():
             while current_idx<total_rows:
                 #identify dates now ->when forecast happens
                 forecast_date=df.index[current_idx]
+                #target date: date we're predicting????????????
+                target_date= forecast_date+ pd.DateOffset(months=h)
                 #check whether is an SNB forecast month
                 if forecast_date.month not in snb_months:
                     current_idx+=1   #move to next month
                     continue
-                target_date= forecast_date+pd.DateOffset(months=h)  #target date
+                #no leakage: last observable index for target
+                last_trainable_idx =current_idx-h
+                #check enough data
+                if last_trainable_idx < 0:
+                    current_idx+= 1
+                    continue
+                
                 #train data: univariate-> only need target history up to current_idx: need most recent monthly data
-                y_full_series= df[target_col].iloc[:current_idx -(h-1)]      #full history up to end of window (only know j-month change that was completed before the change)
+                y_full_series= df[target_col].iloc[:last_trainable_idx +1]      #full history up to end of window (only know j-month change that was completed before the change)
                 #to define train data need to cut off old data if needed
                 if len(y_full_series)> rolling_window_size:
                     y_train= y_full_series.iloc[-rolling_window_size:].dropna()  
@@ -168,7 +176,7 @@ def run_experiment():
                 const_val=model_res.params.get('Const', 0)  #get constant
                 mean_params={k: v for k, v in model_res.params.items() if 'y[' in k}  #extract AR coefficients
                 #call fct for shap values
-                shap_dict=shap_values(model_obj=None, X_input=y_train, model_type='linear', linear_coeffs=mean_params, linear_const=const_val)
+                shap_dict=shap_values(model_obj=None, X_input=y_train,X_train=None, model_type='linear', linear_coeffs=mean_params, linear_const=const_val)
                 #initialize dict to store shap values
                 final_shap = {}
                 #apply scaling logic to shap results  

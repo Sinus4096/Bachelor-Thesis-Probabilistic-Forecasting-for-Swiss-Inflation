@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 from scipy.stats import nct
 from scipy.integrate import quad
@@ -94,7 +95,7 @@ def calculate_empirical_crps(y_true, y_preds, quantiles):
 
 
 
-def shap_values(model_obj, X_input, model_type='linear', linear_coeffs=None, linear_const=0.0):
+def shap_values(model_obj, X_input, X_train=None, model_type='linear', linear_coeffs=None, linear_const=0.0):
     """ calculate Shapley values need to differentiate between linear and non linear models
     -> linear models: Exact Calculation (Coefficients*Values) because it is faster and mathematically precise
      ->QRF: shap (=an approximation) """
@@ -103,28 +104,45 @@ def shap_values(model_obj, X_input, model_type='linear', linear_coeffs=None, lin
 
     #Tree-Based Models (QRF)
     #-------------------------------------------------------
-    if model_type== 'tree':
-        #check dimensionality of input
-        if isinstance(X_input, pd.Series):
-            X_input_df= X_input.to_frame().T  #if Series, convert to single-row DataFrame
-        else:
-            X_input_df= X_input            
-        #initialize TreeExplainer (optimized for Random Forests)
-        explainer= shap.TreeExplainer(model_obj)        
-        #calc SHAP values
-        shap_vals=explainer.shap_values(X_input_df)
-        #handle shape differences in shap library versions (debug)
-        if isinstance(shap_vals, list):
-            vals= shap_vals[0]  #if list, take the first element
-        else:
-            vals= shap_vals
+    if model_type == 'tree':    
+        # 1. Try the much faster TreeExplainer first
+        def extract_to_dict(vals, expected, feature_names):
+            if isinstance(vals, list): vals = vals[0]
+            if len(vals.shape) > 1: vals = vals[0]
+            if isinstance(expected, np.ndarray): expected = expected[0]
+            
+            for i, col in enumerate(feature_names):
+                shap_contributions[f'Shap_{col}'] = vals[i]
+            shap_contributions['Shap_Constant'] = expected
 
-        #map back to feature names
-        for i, col in enumerate(X_input_df.columns):
-            shap_contributions[f'Shap_{col}']=vals[0][i]
-        #TreeExplainer expected_value is average forecast of dataset
-        shap_contributions['Shap_Constant']= explainer.expected_value if not isinstance(explainer.expected_value, np.ndarray) else explainer.expected_value[0]
+        try:
+            # Attempt 1: Fast TreeExplainer
+            explainer = shap.TreeExplainer(model_obj)
+            shap_vals = explainer.shap_values(X_input, check_additivity=False)
+            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns)
+            
+        except Exception:
+            # Attempt 2: Fallback to KernelExplainer (for quantile-forest)
+            if X_train is None:
+                raise ValueError("X_train is required for QRF/KernelExplainer fallback")
 
+            # Capture feature names to fix warning
+            feature_names = X_train.columns.tolist()
+
+            # Wrapper to add column names back and predict median
+            def predict_wrapper(data):
+                if isinstance(data, np.ndarray):
+                    data = pd.DataFrame(data, columns=feature_names)
+                return model_obj.predict(data, quantiles=[0.5]).flatten()
+
+            # Suppress warnings during kmeans and shap calculation
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                background = shap.kmeans(X_train, 10) 
+                explainer = shap.KernelExplainer(predict_wrapper, background)
+                shap_vals = explainer.shap_values(X_input, silent=True)
+            
+            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns)
 
     #Linear Models (AR-GARCH, BVAR)
     #---------------------------------------------------

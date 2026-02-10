@@ -4,12 +4,15 @@ import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
 
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, GridSearchCV
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, GridSearchCV,  KFold, cross_val_predict
 from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from scipy.stats import nct
 from sklearn.linear_model import Ridge
+from sklearn.linear_model import ElasticNet
+from sklearn.pipeline import Pipeline
+
 #get path for utils
 current_dir=Path(__file__).resolve().parent
 #get project root
@@ -17,7 +20,7 @@ scripts_root = current_dir.parent.parent
 sys.path.insert(0, str(scripts_root))
 
 #import needed utils
-from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile
+from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
 
 
@@ -46,7 +49,7 @@ def run_experiment(config):
     df =pd.read_csv(data_path, index_col='Date', parse_dates=True)
     data_yoy_path=project_root/ "Data"/ "Cleaned_Data"/"data_yoy.csv"
     df_yoy=pd.read_csv(data_yoy_path, index_col='Date', parse_dates=True)
-
+    
     #get target variables and forecast horizon from the config file
     targets=config['data']['targets']
     horizons=config['data']['horizons']
@@ -78,38 +81,7 @@ def run_experiment(config):
             #to follow the recursive testing, we don't drop rows where target_col is NAN but filter data available at that specific point in time:
             target_cols_to_drop= [col for col in df.columns if 'target_' in col]    #don't want target variable in X later
 
-            final_params={} #initialize params for loop
-            #check if we need to tune or default
-            if config['model'].get('tune_hyperparameters', False):
-                #get data to tune on (up until eval_start_date)
-                split_idx= df.index.searchsorted(eval_start_date)
-                df_tune= df.iloc[:split_idx].copy().dropna(subset=[target_col]) #define df for tuning up until eval_start_date
-                #define X and Y 
-                X_tune =df_tune.drop(columns=target_cols_to_drop)
-                y_tune=df_tune[target_col]
-                #get model infos
-                raw_grid= config['model']['param_grid']
-                #initialize grids
-                search_space={}
-                fixed_params ={}
-                #randomizedsearchcv needs lists-> transfrom
-                for k, v in raw_grid.items():
-                    if isinstance(v, list):
-                        search_space[k] = v
-                    else:
-                        fixed_params[k] = v
-                #define model for cross-validation
-                tscv=TimeSeriesSplit(n_splits=5)
-                base_model= RandomForestQuantileRegressor(**fixed_params)
-                search = RandomizedSearchCV(estimator=base_model, param_distributions=search_space, n_iter=15, scoring=qrf_crps_scorer,
-                                            cv=tscv, n_jobs=-1, random_state=42)
-                search.fit(X_tune, y_tune)
-
-                #combine fixed parameters with best found params
-                final_params= {**fixed_params, **search.best_params_}
-            #if don't need to tune: dfault
-            else:
-                final_params= config['model']['params']
+            final_params= config['model']['params']
             
             #recursive out-of-sample predictions
             recursive_preds = []    #initialize storage for out-of-sample predictions
@@ -131,64 +103,79 @@ def run_experiment(config):
                 if current_date.month not in snb_months:
                     current_idx+= 1
                     continue
-                #training set ranges from beginning up to the current index
-                train_indices= range(0, current_idx)    
-                
-                if current_idx >= total_rows:
-                    break #get out if reached the last row already
-
-                #define ssubdf of original df up until next forecast step
-                df_slice = df.iloc[:current_idx + 1].copy()
+                #at current_idx, last observable target is at current_idx -h
+                last_trainable_idx = current_idx - h  
+                #safety sheck for enough data
+                if last_trainable_idx< 0:
+                    current_idx+= 1
+                    continue
+                #define window
+                train_indices = range(0, last_trainable_idx + 1)
 
                 #separate X and Y
-                X_slice= df_slice.drop(columns=target_cols_to_drop) #drop all cols starting with target_
-                Y_slice= df_slice[target_col]
+                X_slice= df.drop(columns=target_cols_to_drop) #drop all cols starting with target_
+                Y_slice= df[target_col]
                 #define train and test set
-                X_train= X_slice.iloc[train_indices]
-                Y_train = Y_slice.iloc[train_indices]
-                X_test = X_slice.iloc[[current_idx]]
+                X_train= X_slice.iloc[train_indices].copy()  
+                Y_train= Y_slice.iloc[train_indices].copy()
+                X_test= X_slice.iloc[[current_idx]].copy()  #test input is features available today
                 #don't use df for testing /evaluating but the  yoy changes
                 #only drop NAN's for the training set: test might have NAN's in the end-> inference
                 Y_train= Y_train.dropna()
                 X_train= X_train.loc[Y_train.index]
-
+                #fit standard scaler recursively
+                scaler= StandardScaler()
+                #avoid dataleakage: fit only on training data
+                X_train= pd.DataFrame(scaler.fit_transform(X_train), 
+                                              columns=X_train.columns, index=X_train.index)
+                X_test= pd.DataFrame(scaler.transform(X_test), 
+                                             columns=X_test.columns, index=X_test.index)
 
                 #if configured to use residual forecasting
+                # --- Improved Residual/Extrapolation Logic ---
                 if use_residuals:
                     #data already scaled in preprocessing 
                     #define rolling window for structural breaks: 5y=60months
-                    window_size=60
+                    window_size= 120 if h>= 9 else 90
+                    #CV-> best alpha but shouldn't fit on data from 20 years ago if there is a break
+                    #->limit the training data to the rolling window for the fit
+                    if len(X_train)> window_size:
+                        X_train_recent=X_train[-window_size:]
+                        Y_train_recent= Y_train.iloc[-window_size:]
+                    else:
+                        X_train_recent= X_train
+                        Y_train_recent=Y_train
                     #ensure we have enough data for splits, else reduce splits
-                    n_splits_dynamic =min(5, len(X_train) - 2)
+                    n_splits_dynamic =min(5, len(X_train_recent) - 2)
                     if n_splits_dynamic > 1:
                         #TimeSeriesSplit with max_train_size creates rolling effect, validate 1 step ahead
-                        tscv_rolling = TimeSeriesSplit(n_splits=n_splits_dynamic, test_size=1, max_train_size=window_size)
+                        tscv_rolling = TimeSeriesSplit(n_splits=n_splits_dynamic, test_size=h, max_train_size=window_size)
                         #grid search for best alpha
-                        ridge_params= {'alpha': [0.1, 1.0, 10.0, 50.0, 100.0, 500.0]}
-                        grid_search = GridSearchCV(Ridge(),ridge_params,cv=tscv_rolling,scoring='neg_mean_squared_error',n_jobs=-1)
-                        #CV-> best alpha but shouldn't fit on data from 20 years ago if there is a break
-                        #->limit the training data to the rolling window for the fit
-                        if len(X_train)> window_size:
-                            X_train= X_train[-window_size:]
-                            Y_train_recent= Y_train.iloc[-window_size:]
+                        if h >= 12:
+                            # Force stronger regularization for long horizons to push the linear model toward a "Mean" forecast
+                            en_params = {'alpha': [50.0,100.0, 500.0],'l1_ratio': [0.05,0.1, 0.3, 0.5] } 
                         else:
-                            X_train_recent= X_train
-                            Y_train_recent=Y_train
+                            en_params = {'alpha': [0.1, 1.0, 10.0, 50.0],'l1_ratio': [0.1, 0.3, 0.5]}
+
+                        grid_search = GridSearchCV(ElasticNet(), en_params, cv=tscv_rolling, 
+                            scoring='neg_mean_squared_error', n_jobs=-1)
+                                            
                     
-                        #fit grid on recent data (
+                        #fit grid on recent data to find best alpha for this specific point in time
                         grid_search.fit(X_train_recent, Y_train_recent)
-                        best_ridge = grid_search.best_estimator_                        
+                        best_ridge =grid_search.best_estimator_                        
                     else:
                         #fallback if too little data for CV: just take default alpha and fit on all data
-                        best_ridge= Ridge(alpha=1.0)
-                        best_ridge.fit(X_train, Y_train)
-
+                        best_ridge=ElasticNet(alpha=0.1).fit(X_train_recent, Y_train_recent)
                     #train residuals (in-sample) & apply model to full history for QRF
                     train_linear_preds= best_ridge.predict(X_train)
                     Y_train_effective= Y_train -train_linear_preds                    
                     #test preds
                     test_linear_preds=best_ridge.predict(X_test)
-                    
+                    #get shapley values for linear part to add to the results later
+                    linear_coeffs = dict(zip(X_train.columns, best_ridge.coef_))
+                    shap_linear= shap_values(model_obj=None, X_input=X_test, X_train=X_train_recent, model_type='linear', linear_coeffs=linear_coeffs, linear_const=best_ridge.intercept_)
+                        
                 else: #normal qrf forecasting
                     Y_train_effective= Y_train
                     test_linear_preds=np.zeros(len(X_test))  #no linear effect to add later
@@ -210,20 +197,36 @@ def run_experiment(config):
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
                 #add linear part if residual forecasting
-                preds_plot+= linear_add
-                preds_dense+= linear_add
-                
+                preds_plot+= (linear_add)
+                preds_dense+= (linear_add)
+                #calculate shapley values for the qrf tree part
+                shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
+                #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
+                shap_combined= shap_tree.copy()
+                #combine shap values if residual forecasting
+                if use_residuals:
+                    #merge keys
+                    all_keys= set(shap_tree.keys()) | set(shap_linear.keys()) 
+                    #look through keys
+                    for k in all_keys:
+                        #sum values, get 0 if key missing
+                        tree_val= shap_tree.get(k, 0.0)  #tree part
+                        linear_val= shap_linear.get(k, 0.0)  #linear part
+                        shap_combined[k]= tree_val + linear_val  #combine                
                 #check if target date exists in df_yoy (if not, cannot evaluate)
                 if target_date in df_yoy.index:
                         
-                     #get actual value from df_yoy
-                     actual_val= df_yoy.loc[target_date, yoy_col] 
-                     if forecast_method=='direct' or h==12:
-                         #direct forecast or 12m ahead: use qrf preds directly
-                         preds_dense_yoy= preds_dense
-                         preds_plot_yoy= preds_plot
-                     #else reconstruct the forecasted YoY                     
-                     else: #if h<12, combine known histaory and model preds
+                    #get actual value from df_yoy
+                    actual_val= df_yoy.loc[target_date, yoy_col] 
+                    if forecast_method=='direct' or h==12:
+                        #direct forecast or 12m ahead: use qrf preds directly
+                        preds_dense_yoy= preds_dense
+                        preds_plot_yoy= preds_plot
+                        #base effect and scaling for shapley values
+                        base_effect = 0.0
+                        scaling_factor = 1.0
+                    #else reconstruct the forecasted YoY                     
+                    else: #if h<12, combine known histaory and model preds
                         months_back=12 - h  #need the change from t-(12-h) to t
                         history_date= forecast_date -pd.DateOffset(months=months_back)
                         #check if history date exists
@@ -243,35 +246,44 @@ def run_experiment(config):
                         #combine
                         preds_dense_yoy=base_effect +pred_dense_h_step
                         preds_plot_yoy= base_effect+pred_plot_h_step
-                     #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
-                     sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
-                     #flatten to 1D array to fit distribution later
-                     y_fit_data=preds_dense_yoy.flatten()
-                     
+                    #initialize dict to store shap values for this forecast
+                    final_shap={}
+                    #apply scaling to shap values if 
+                    final_shap['Shap_Base_Effect'] = base_effect
+                    #loop through the combined shap values and apply scaling to the tree part (linear part already in original units)
+                    for k, v in shap_combined.items():
+                        final_shap[k]=v*scaling_factor
+                    #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
+                    sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
+                    #flatten to 1D array to fit distribution later
+                    y_fit_data=preds_dense_yoy.flatten()
+                    
 
-                     skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
-                         
-                     #calc PIT (for plotting later): cdf of actual value under fitted skew-t
-                     pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                     #calc step-specific CRPS for skew-t
-                     parametric_crps=calculate_crps(actual_val, skew_params)
-                     #get params for plotting later
-                     dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
-                     #want to calc empirical crpsto see how much smoothing the skew-t or KDE fit changed the result
-                     empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
-                     #make dic of result
-                     result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
-                             'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                             'df_skewt': dist_params['df'], 'nc_skewt': dist_params['nc'], 'loc_skewt': dist_params['loc'], 'scale_skewt': dist_params['scale'], 'PIT': pit_val}
+                    skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
+                        
+                    #calc PIT (for plotting later): cdf of actual value under fitted skew-t
+                    pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
+                    #calc step-specific CRPS for skew-t
+                    parametric_crps=calculate_crps(actual_val, skew_params)
+                    #get params for plotting later
+                    dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
+                    #want to calc empirical crpsto see how much smoothing the skew-t or KDE fit changed the result
+                    empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
+                    #make dic of result
+                    result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
+                            'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
+                            'df_skewt': dist_params['df'], 'nc_skewt': dist_params['nc'], 'loc_skewt': dist_params['loc'], 'scale_skewt': dist_params['scale'], 'PIT': pit_val}
+                    #add shapley values to the result dictionary
+                    result.update(final_shap)
                     #append
-                     recursive_preds.append(result)
+                    recursive_preds.append(result)
                 #advance window 1month
                 current_idx+=1
             
             #save and evaluate final recursive results
             results_df= pd.DataFrame(recursive_preds)
             results_df.set_index('Date', inplace=True)
-            save_name=f"Results/Data_experiments_qrf/{config['experiment_name']}_{target_name}_{h}m.csv"
+            save_name=f"Results/Data_experiments_qrf2/{config['experiment_name']}_{target_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 

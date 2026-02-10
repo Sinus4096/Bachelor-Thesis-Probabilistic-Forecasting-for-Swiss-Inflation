@@ -59,7 +59,7 @@ class BVAR:
         self.n_features =X.shape[1]  #number of features after adding intercept and deduplication
         return X, Y_aligned
 
-    def minnesota_dummies(self, Y, a1, a2,a3, mu, sigmas_y, sigmas_x): 
+    def minnesota_dummies(self, a1, a2,a3, sigmas_y, sigmas_x): 
         """creates dummy observations: minnesota beliefs into data rows"""
         N= self.n_vars     #nr target variables
         K= self.n_features        #total features 
@@ -134,35 +134,33 @@ class BVAR:
         return alpha_0, V_alpha_0_inv
 
     
-    def log_ml_dummies(self, loglambda, X, Y, a3, sigmas):
-        """compute log marginal likelihood for using minnesota dummies
-        """
-        #define parameters
-        lambda_val= np.exp(loglambda)  
-        #get dummy obs
-        X_dum, Y_dum= self.minnesota_dummies(Y.shape[1], lambda_val, a3, sigmas)
-        #stack data and dummies
-        X_star= np.vstack([X_dum, X])
-        Y_star= np.vstack([Y_dum, Y])
-        #compute posterior components
-        XX_star=X_star.T @X_star
-        T_star, K=X_star.shape   #get dimensions: T_star=obs+dummies, K=nr of preds
-        T_real= Y.shape[0]  #nr of actual obs
-        #Cholesky dcomp of XX_star for numerical stability
-        L=np.linalg.cholesky(XX_star)
-        log_det_xx=2*np.sum(np.log(np.diag(L)))  #log determinant of X'X
-        #posterior mean
-        Phi_post= np.linalg.solve(XX_star, X_star.T @Y_star)
-
-        #residuals
-        residuals= Y_star -X_star @Phi_post
-        #posterior scale matrix
-        S_post= residuals.T @residuals
-        #compute log determinant of S_post
-        sign, log_det_s= np.linalg.slogdet(S_post)
-        #compute log marginal likelihood
-        log_ml= 0.5*Y.shape[1]* (log_det_xx)-0.5*(T_star-K)*log_det_s
-        return log_ml
+    def log_ml_minnesota(self, params, X, Y, a3, sigmas_y, sigmas_x):
+        """ Log Marginal Likelihood for Minnesota Prior """
+        a1 = np.exp(params[0])
+        a2 = np.exp(params[1]) # Relative cross-tightness
+        
+        X_dum, Y_dum = self.minnesota_dummies(a1, a2, a3, sigmas_y, sigmas_x)
+        X_star = np.vstack([X_dum, X])
+        Y_star = np.vstack([Y_dum, Y])
+        
+        # Standard Normal-Inverse Wishart Marginal Likelihood formula
+        T_star, K = X_star.shape
+        T = Y.shape[0]
+        N = Y.shape[1]
+        
+        XX_star = X_star.T @ X_star + np.eye(K) * 1e-8
+        L_xx = np.linalg.cholesky(XX_star)
+        log_det_xx = 2 * np.sum(np.log(np.diag(L_xx)))
+        
+        Phi_post = np.linalg.solve(XX_star, X_star.T @ Y_star)
+        S_post = (Y_star - X_star @ Phi_post).T @ (Y_star - X_star @ Phi_post)
+        
+        sign, log_det_s = np.linalg.slogdet(S_post)
+        
+        # Marginal Likelihood for the Natural Conjugate form
+        # Log ML proportional to:
+        log_ml = - (T * N / 2) * np.log(np.pi) + (N / 2) * (-log_det_xx) - ((T_star - K) / 2) * log_det_s
+        return -log_ml # Return negative for minimization
  
     
 
@@ -211,8 +209,7 @@ class BVAR:
         """ constructs prior moments for natural conjugate normal-inverse wishart prior"""
         #get dimensions
         K= self.n_features
-        L= len(self.lag_indices)
-        n_preds=(K- 1)//L   #number of predictors per lag        
+        L= len(self.lag_indices)       
         #prior mean: identity for first own-lag, zeros otherwise
         Phi_0= np.zeros((K, N))         
         #prior tightness matrix
@@ -221,24 +218,16 @@ class BVAR:
         psi_diag[0]= a3  
         #loop through lag blocks and variables to set tightness and prior mean       
         for j in range(len(sigmas_x)):
-            col_idx = j + 1 # +1 for intercept
+            #column index in the full Phi matrix (including intercept->+1)
+            col_idx= j+1             
+            n_preds_raw= len(sigmas_x)//len(self.lag_indices) #number of predictors before deduplication
+            lag_idx = j//n_preds_raw     #which lag block this feature belongs to (0 for lag 0, 1 for lag 1, etc.)
+            k= max(self.lag_indices[lag_idx], 1)  #scaling factor based on lag position (treat lag 0 as 1 for scaling to avoid div by zero)
             
-            #find which lag this column belongs to 
-            n_preds_raw= len(sigmas_x) // len(self.lag_indices) 
-            lag_idx = j // n_preds_raw
-            k = max(self.lag_indices[lag_idx], 1)
-            
-            # Use the specific sigma for this feature
-            s_jj = sigmas_x[j]
-            
-            # Prior Variance (Tightness)
-            # Formula: lam^2 / (k^2 * sigma_j^2)
-            psi_diag[col_idx] = (lam**2) / ((k**2) * (s_jj**2))
-            
-            # Optional: Set Prior Mean to 1.0 for own-lag 0 if needed
-            # This requires checking if the variable name matches
-            # Phi_0[col_idx, var_idx] = 1.0 
-
+            #use the specific sigma for this feature
+            s_jj= sigmas_x[j]            
+            #prior variance for this feature based on Minnesota-style logic
+            psi_diag[col_idx]=(lam**2) /((k**2)*(s_jj**2))
         return Phi_0, np.diag(psi_diag)
 
 
@@ -258,18 +247,20 @@ class BVAR:
             res= np.diff(Y[:, idx])
             sigmas.append(np.std(res) if len(res)>0 else 0.1)
         sigmas= np.array(sigmas)
-        # 2. Calculate Sigmas for the RAW X variables 
-        # (Extract feature columns before they were lagged)
-        feature_cols = [c for c in data.columns if 'target_' not in c]
-        X_raw_data = data[feature_cols].values
-        
-        sigmas_x_raw = []
+ 
+        #extract feature columns before they were lagged
+        feature_cols= [c for c in data.columns if 'target_' not in c]
+        X_raw_data= data[feature_cols].values  #get raw feature data (without lags) 
+        #as create lags only for X, need seperate sigma calculation for the raw features
+        sigmas_x_raw=[]
+        #loop through each feature column in the raw X data to calculate its sigma
         for idx in range(X_raw_data.shape[1]):
-            res = np.diff(X_raw_data[:, idx])
-            sigmas_x_raw.append(np.std(res) if len(res) > 0 else 0.1)
+            res=np.diff(X_raw_data[:, idx])  #use diff to get changes
+            sigmas_x_raw.append(np.std(res) if len(res) > 0 else 0.1)   #avoid zero std if not enough data
+        #to array
         sigmas_x_raw = np.array(sigmas_x_raw)
-        L = len(self.lag_indices)
-        sigmas_x_tiled = np.tile(sigmas_x_raw, L) 
+        L= len(self.lag_indices)  #number of lag blocks
+        sigmas_x_tiled=np.tile(sigmas_x_raw, L)        #tile the raw sigmas according to the lag structure
         
         # Apply the same deduplication mask used in create_lags
         sigmas_x = sigmas_x_tiled[self.kept_indices]
@@ -277,16 +268,15 @@ class BVAR:
         #-----------------
         if 'minnesota' in self.prior_type:
             #def default params
-            a1=self.params.get('lambda', 0.01)
-            a2= self.params.get('theta', 0.15)
-            mu= self.params.get('mu', 1.0)
             a3= self.params.get('alpha', 100.0)
-            #glp optimization->best lambda (optional)
-            #res=optimize.minimize_scalar(lambda loglam: -self.log_ml_dummies(loglam, X, Y, a3, sigmas), bounds=(-5.0, 1.0), method='bounded')
-            #optimal lambda
-            #final_lambda=np.exp(res.x)
+            #initial guesses for log(a1) and log(a2)
+            init_params=[np.log(0.01), np.log(0.15)] 
+            #residuals by optimizing the log marginal likelihood with respect to a1 and a2 
+            res =optimize.minimize(self.log_ml_minnesota, init_params, args=(X, Y, a3, sigmas, sigmas_x),bounds=[(np.log(0.01), np.log(0.3)), (np.log(0.01), np.log(0.5))])
+            #get optimal a1 and a2 by exponentiating the log values
+            a1, a2=np.exp(res.x)
             #create dummy observations based on final lambda
-            X_dum, Y_dum= self.minnesota_dummies(Y, a1, a2,a3, mu, sigmas)
+            X_dum, Y_dum= self.minnesota_dummies(a1, a2,a3, sigmas, sigmas_x)
             
             
             #augment data: instead of making giant cov matrix-> add rows to data
@@ -331,34 +321,29 @@ class BVAR:
             a3= self.params.get('alpha', 100.0) #intercept tightness
             n_iter =self.params.get('sampling', {}).get('n_draws', 2000)    #number of posterior draws
             burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
-            # AR(1) residual variances for scaling
-            sigmas = []
-            for i in range(N):
-                res = np.diff(Y[:, i])
-                sigmas.append(np.std(res) if len(res) > 1 else 0.1)
-            sigmas = np.array(sigmas)
-            
+                        
             #prior moments
             alpha_0=np.zeros(N*K)  #all zeros for WN
             V_alpha_0= np.zeros(N*K) #to store prior precision diag
-            for n in range(N): # For each equation (Target Variable)
-                for k in range(K): # For each predictor feature
-                    idx = n * K + k
-                    
-                    if k == 0: # Intercept
-                        V_alpha_0[idx] = a3
+            #loop through each equation and feature to set prior variances based on minnesota logic
+            for n in range(N): 
+                for k in range(K):
+                    #get index in vectorized alpha
+                    idx= n*K +k
+                    #if feature is intercept, set variance based on a3, otherwise use minnesota logic for own vs cross lags
+                    if k ==0: # Intercept
+                        V_alpha_0[idx]= a3
                     else:
-                        # Logic to identify 'Own Lag' vs 'Cross Lag'
-                        # feature_idx is k-1 (ignoring intercept)
-                        # var_j is the variable index (0 to N-1) this feature belongs to
-                        var_j = (k - 1) % N 
-                        
-                        if var_j == n:
-                            # OWN LAG (AR component)
-                            V_alpha_0[idx] = a1**2
+                        #logic to identify own lag vs cross lag: feature_idx is k-1 (ignoring intercept) var_j is the variable index (0 to N-1) this feature belongs to
+                        var_j =(k-1)%N 
+                        #if own lag                        
+                        if var_j ==n:
+                            #use a1 for own lags
+                            V_alpha_0[idx]= a1**2
                         else:
-                            # CROSS LAG (Variable J predicting Variable N)
-                            V_alpha_0[idx] = (a1 * a2)**2
+                            #cross lags: use a2 and scale by sigma of variable j
+                            V_alpha_0[idx]=(a1* a2)**2
+            #define prior precision as inverse of variance
             V_alpha_0_inv =np.diag(1.0/V_alpha_0)
             #prior scale matrix
             S_0=np.diag(sigmas**2)
@@ -417,51 +402,26 @@ class BVAR:
             a1= best_lambda
             a2= best_lambda       
 
-            #posterior if dummies used for posterior estimation
-            if self.implementation_type== 'dummies':
-
-                #get dummy obs
-                X_dum, Y_dum= self.minnesota_dummies(Y, a1, a2,a3, mu, sigmas, sigmas_x)
-                #augment data: instead of making giant cov matrix-> add rows to data
-                Y_star=np.vstack([Y_dum, Y])
-                X_star=np.vstack([X_dum, X])
-                #add jitter to diagonal to avoid multicolinearity proble
-                XX= X_star.T @ X_star
-                jitter= np.eye(K)*1e-7   #tiny nudge to make positive definite
-                Psi_post_inv =XX+jitter  #posterior precision
-
-                #posterior mean
-                XY=X_star.T @Y_star
-                Phi_post=np.linalg.solve(Psi_post_inv, XY)
-                #calc posterior covariance
-                Psi_post =np.linalg.inv(Psi_post_inv)
-                #posterior scale matrix
-                residuals= Y_star -X_star @Phi_post
-                S_post= residuals.T @residuals
-                #posterior degrees of freedom
-                nu_post= N+2+T
-            
-            elif self.implementation_type== 'analytical':
-                #priors; Psi is relative tightness matrix
-                Phi_0, Psi_0=self.natural_moments(N, a1, a3, sigmas,sigmas_x)
-                Psi_0_inv=np.diag(1.0/np.diag(Psi_0))              
-                #prior scale matrix
-                S_0 =np.diag(sigmas**2)
-                nu_0=N+ 2    #prior degrees of freedom
-                #posteriors (derived analytically)
-                XX=X.T @X
-                XY= X.T @ Y
-                YY=Y.T @ Y
-                Psi_post_inv=Psi_0_inv +XX  #posterior precision
-                Psi_post =np.linalg.solve(Psi_post_inv, (Psi_0_inv @ Phi_0 + XY))
-                               
-                #comp of scale matrix
-                term_prior= Phi_0.T @ Psi_0_inv @Phi_0
-                term_post= Phi_post.T@ Psi_post_inv @Phi_post
-                #calc posterior scale matrix
-                S_post= S_0 +YY +term_prior -term_post
-                nu_post = nu_0+T
-
+            #posterior with dummies used for posterior estimation
+            #get dummy obs
+            X_dum, Y_dum= self.minnesota_dummies(a1, a2,a3, sigmas, sigmas_x)
+            #augment data: instead of making giant cov matrix-> add rows to data
+            Y_star=np.vstack([Y_dum, Y])
+            X_star=np.vstack([X_dum, X])
+            #add jitter to diagonal to avoid multicolinearity proble
+            XX= X_star.T @ X_star
+            jitter= np.eye(K)*1e-7   #tiny nudge to make positive definite
+            Psi_post_inv =XX+jitter  #posterior precision
+            #posterior mean
+            XY=X_star.T @Y_star
+            Phi_post=np.linalg.solve(Psi_post_inv, XY)
+            #calc posterior covariance
+            Psi_post =np.linalg.inv(Psi_post_inv)
+            #posterior scale matrix
+            residuals= Y_star -X_star @Phi_post
+            S_post= residuals.T @residuals
+            #posterior degrees of freedom
+            nu_post= N+2+T
             #direct sampling: draw from Inverse-Wishart
             self.sigma_draws =stats.invwishart.rvs(df=nu_post, scale=S_post,size=n_draws)
             if n_draws== 1:
@@ -481,6 +441,56 @@ class BVAR:
                 self.phi_draws[draw]= Phi_post+L_Psi @Z@L_Sigma.T
             
         return self
+    
+    def shapley_params(self, data, target_idx):  # <--- Make sure target_idx is here
+        """
+        Helper to extract inputs needed for Shapley value calculation.
+        """
+        # 1. Recreate the specific input vector x_t used for forecasting
+        # Extract feature columns (excluding targets)
+        feature_cols = [c for c in data.columns if 'target_' not in c]
+        X_raw = data[feature_cols].values
+        n_obs = X_raw.shape[0]
+        
+        # Extract lags
+        lags = []
+        for lag in self.lag_indices:
+            idx = n_obs - lag - 1
+            lags.append(X_raw[idx, :])
+            
+        X_combined = np.concatenate(lags)
+        
+        # Apply the exact same deduplication mask derived during training
+        X_unique = X_combined[self.kept_indices]
+        
+        # 2. Create Feature Names (so we know which lag is which)
+        raw_names = feature_cols
+        all_names = []
+        for lag in self.lag_indices:
+            for name in raw_names:
+                all_names.append(f"{name}_lag{lag}")
+        
+        # Filter names using the kept_indices
+        final_names = [all_names[i] for i in self.kept_indices]
+        
+        # 3. Get Mean Coefficients (Posterior Mean)
+        # phi_draws shape is (n_draws, K, N_vars). Take mean across draws.
+        beta_mean_all = np.mean(self.phi_draws, axis=0) # Shape (K, N_vars)
+        
+        # Select coefficients for THIS specific target variable
+        beta_target = beta_mean_all[:, target_idx]
+        
+        # Split Intercept (index 0) from Coefficients (indices 1:)
+        # (Assuming the first column of X constructed in BVAR.fit was the intercept)
+        intercept = beta_target[0]
+        coeffs = beta_target[1:]
+        
+        # 4. Package for the utility function
+        # Create a Series so the shap_values function can match names
+        x_series = pd.Series(X_unique, index=final_names)
+        coeffs_dict = dict(zip(final_names, coeffs))
+        
+        return x_series, coeffs_dict, intercept
     
     def forecast(self, data):
         #extract only the predictor columns for create lags logic

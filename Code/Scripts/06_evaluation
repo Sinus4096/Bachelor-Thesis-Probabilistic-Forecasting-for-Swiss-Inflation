@@ -5,11 +5,10 @@ import seaborn as sns
 import os
 
 # --- CONFIGURATION ---
-base_path = 'Code/Results/Data_experiments_benchmark'
+base_path='Code/Results'
 data_type = 'Headline' 
-models = ['ARGARCH', 'BVAR', 'QRF_Default_Res_']  # Add your 3 models here
 horizons = [3, 6, 9, 12]
-rolling_window = 12 # 3 years if quarterly
+rolling_window =12 # 3 years if quarterly
 
 # Storage: data_dict['ARGARCH'][3] -> DataFrame
 data_dict = {m: {h: None for h in horizons} for m in models}

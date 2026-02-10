@@ -59,13 +59,27 @@ print(nans_per_column)
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
-for i in [1, 2, 12]:
+for i in [1, 2, 6, 12]:
     df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
     df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
 
+#add 12 months yoy changes
+#df_stationary['current_yoy_headline'] = np.log(df['Headline_CPI']).diff(12) * 100
+#df_stationary['current_yoy_core'] = np.log(df['Core_CPI']).diff(12) * 100
 
+#df_stationary['momentum_3m'] = (np.log(df['Headline_CPI'].rolling(3).mean()) - 
+                               # np.log(df['Headline_CPI'].shift(3).rolling(3).mean())) * 400
+# Momentum: Is 3-month inflation higher than the 12-month average?
+df_stationary['headline_momentum'] = (
+    df_stationary['headline_1m'].rolling(3).mean() - 
+    df_stationary['headline_1m'].rolling(12).mean()
+)
 
+df_stationary['core_momentum'] = (
+    df_stationary['core_1m'].rolling(3).mean() - 
+    df_stationary['core_1m'].rolling(12).mean()
+)
 #--------------------------
 #add Cycle features: sine/consine transformations
 #--------------------------------
@@ -109,7 +123,7 @@ df_bvar= df_bvar.loc[start_date:]
 #add time index feature for trend capture
 #---------------------------------
 #only for qrf model as bvar can capture trend via its priors
-df_stationary['time_index']= np.arange(len(df_stationary))
+#df_stationary['time_index']= np.arange(len(df_stationary))
 
 #-----------------------------
 #cope with NA's
@@ -123,10 +137,10 @@ print(rows_with_nan)
 #->NA lags are as expected in the first two rows-> set start date later to avoid crash of qrf
 #do not drop NA's of targets later here: their availability depends on the forecast horizon
 #as will evaluate using yoy inflation dropping later won't make a change
-#set start date as last available date of predictors +2months year as bvar will have to create a 2 month lag for it too
+#set start date as last available date of predictors +1 year as bvar will have to create a 12 month lag for it too
 base_date=df_stationary['infl_e_current_year'].first_valid_index()
-#add 2 months to that date 
-start_date= base_date+pd.DateOffset(months=3)
+#add 12 months to that date 
+start_date= base_date+pd.DateOffset(months=12)
 df_stationary= df_stationary.loc[start_date:] 
 #recheck
 rows_with_nan=df_stationary[df_stationary.isna().any(axis=1)]
@@ -147,25 +161,26 @@ print(df_stationary.describe().T)
 
 #need to standardize based on data we have available: meaning based on training data to prevent look-ahead bias
 #define split date
-test_start_date= '2012-10-01'
+#test_start_date= '2013-07-01'
 #define exclusion criteria: dont want to standardize targets 
-vars_to_scale =[col for col in df_stationary.columns if 'target' not in col]
-vars_to_scale_bvar=[col for col in df_bvar.columns if 'target' not in col]  
+#vars_to_scale =[col for col in df_stationary.columns if 'target' not in col]
+#vars_to_scale_bvar=[col for col in df_bvar.columns if 'target' not in col]  
 
 #def scaler
-scaler=StandardScaler()
+#scaler=StandardScaler()
 #fit scale on training data only
-scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
+#scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
 #transform the data
-df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
+#df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
 #new scaler for BVAR dataframe 
-scaler_bvar= StandardScaler()
+#scaler_bvar= StandardScaler()
 #fit only on BVAR training data 
-scaler_bvar.fit(df_bvar.loc[:test_start_date].iloc[:-1][vars_to_scale_bvar])
-df_bvar[vars_to_scale_bvar]= scaler_bvar.transform(df_bvar[vars_to_scale_bvar])
+#scaler_bvar.fit(df_bvar.loc[:test_start_date].iloc[:-1][vars_to_scale_bvar])
+#df_bvar[vars_to_scale_bvar]= scaler_bvar.transform(df_bvar[vars_to_scale_bvar])
 
 #recheck descriptive stats
 print(df_stationary.describe().T)
+#decision: to have best fits: will do scaling recursively in the training loop of the qrf model
 
 
 

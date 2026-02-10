@@ -2,6 +2,7 @@ import sys
 import pandas as pd
 import numpy as np
 from scipy import stats
+from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from pathlib import Path
@@ -11,7 +12,7 @@ current_dir=Path(__file__).resolve().parent
 scripts_root = current_dir.parent.parent   
 sys.path.insert(0, str(scripts_root))
 from Scripts.Utils.bvar_utils import BVAR
-from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse
+from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
 
 
@@ -52,7 +53,7 @@ def run_experiment(config):
     
     #model config from the config file
     model_conf= config['model']
-    lags=model_conf.get('lags',2)
+    lags=model_conf.get('lags',12)
     prior_type=model_conf['prior_type']
     implementation_type= model_conf.get('implementation_type','dummies')
     prior_params=model_conf['params']
@@ -90,23 +91,45 @@ def run_experiment(config):
             if target_date not in df_yoy.index:
                 current_idx+= 1
                 continue
+            #targets only know if they finished before forecast date
+            train_end_idx= current_idx-h
+            if train_end_idx< lags: # Need enough data for lags
+                current_idx+= 1
+                continue
             #prepare training data up to current idx 
-            df_train = df_system.iloc[training_offset : current_idx + 1].dropna(subset=available_targets)
+            df_train = df_system.iloc[training_offset : (current_idx - h) + 1].dropna(subset=available_targets)
+            #initialize for standardization
+            scaler=StandardScaler()
+            #fit scaler on training data predictors
+            df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
                 
             #initialize and fit BVAR model
             model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
-            model.fit(df_train)
+            model.fit(df_train) #on scaled data
             #def test set and include enough previous obs for lags
-            X_test = df_system.iloc[current_idx - (training_offset - 1) : current_idx + 1]
+            X_test= df_system.iloc[current_idx- lags : current_idx+ 1]
+            #transform test set with scaler fitted on training data
+            X_test= pd.DataFrame(scaler.transform(X_test), index=X_test.index, columns=X_test.columns)
             #forecast
             preds_draws_all=model.forecast(X_test)
-            #restribt evalluation to quarterly
             
             #iterate through all target variables& extract results
             for i, var_name in enumerate(target_names):
                 #preds draws made corresnponding to current target col
                 preds_draws=preds_draws_all[:, i]
-                        
+                #get name of target col
+                target_col_name=current_target_cols[i]
+                #get params for shaply
+                x_input_series, coeffs_dict, intercept= model.shapley_params(X_test, i)
+
+                #calc shapley values
+                shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
+                #get scaler stats for shapley values
+                target_col_idx= df_system.columns.get_loc(target_col_name)  #get index of target col in system
+                target_mean= scaler.mean_[target_col_idx]  #get mean of target col from scaler
+                target_scale= scaler.scale_[target_col_idx]  #get scale of target col from scaler
+                #unscale the draws for evaluation and shapley value rescaling
+                preds_draws= (preds_draws*target_scale)+target_mean
                 #get actual yoy value
                 actual_yoy=df_yoy.loc[target_date, var_name]
                 #to calc price levels need levelsof core and headline cpi
@@ -114,6 +137,9 @@ def run_experiment(config):
                 #direct forecast evaluation: if h==12 can evaluate directly
                 if h==12:
                     preds_draws_yoy=preds_draws
+                    #shapley scaling: standard deviation
+                    shap_scaling = target_scale
+                    base_shap_effect=0 #since we are forecasting the change from t-12 to t, the base effect is 0 (no change) and the shapley values show how much each feature contributes to deviating from this base effect
                 else:
                     #for h<12: combine history with deannualized model predictions
                     months_back=12- h#need the change from t-(12-h) to t
@@ -128,8 +154,16 @@ def run_experiment(config):
                     base_effect= (p_t-p_hist)*100
                     scaling_factor= h/12
                     preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
+                    #shapley scaling: scale the shapley values by the same factor to reflect their contribution to the deannualized forecast
+                    shap_scaling= target_scale*scaling_factor
+                    base_shap_effect= base_effect  #the base effect is the deannualized change, and the shapley values show how much each feature contributes to deviating from this deannualized change
 
-                            
+                #rescale shapley values from standardized units to YoY units
+                final_shap={}                
+                for k, v in shap_dict.items():
+                    #scale back to original units 
+                    final_shap[k] =v*shap_scaling  
+                final_shap['Shap_Base_Effect'] = base_shap_effect
                 #calc CRPS
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 #bvar gives draws so we calc quantiles for the fit
@@ -148,11 +182,14 @@ def run_experiment(config):
                 rmse= calculate_rmse(actual_yoy, median)
                 
                 #store result to specific target list
-                results_storage[var_name].append({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
+                results_entry=({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
                                                     'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
                                                     'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
                                                     'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
                                                     'scale_skewt': skew_params[3],'PIT': pit_value})
+                #add shapley values to results entry
+                results_entry.update(final_shap)                
+                results_storage[var_name].append(results_entry)
             #advance window by 1 month
             current_idx +=1
 
@@ -162,7 +199,7 @@ def run_experiment(config):
             results_df = pd.DataFrame(results_storage[var_name])
             results_df.set_index('Date', inplace=True)
                 
-            save_name = f"Results/Data_experiments_bvar/{config['experiment_name']}_{var_name}_{h}m.csv"
+            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{var_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 if __name__ =="__main__":

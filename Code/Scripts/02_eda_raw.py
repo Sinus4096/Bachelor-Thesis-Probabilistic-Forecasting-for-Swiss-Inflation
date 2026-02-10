@@ -212,7 +212,7 @@ print(stats[cols])
 #probably will need to standardize the data especially for feature importance of qrf and for config with ridge regression
 
 #from now on to prevent data leakage, only use data from 2015 onwards (training data)
-df= df.loc[:'2012-07-01']
+df= df.loc[:'2013-07-01']
 
 #---------------------------------------
 #Check For Correlation
