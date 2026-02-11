@@ -32,8 +32,8 @@ class BVAR:
         n_obs= len(data)
         
         #define want lags 0, 1, 2, and 12
-        self.lag_indices =[0, 1, 2, 12]
-        max_lag= 12  #biggest lag
+        self.lag_indices =[0, 1, 2,3]
+        max_lag= 6  #biggest lag
         #if less obs than max lag +1 -> cannot create lagged features-> raise error
         if n_obs <= max_lag:
             raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires at least 13 observations.")
@@ -274,7 +274,9 @@ class BVAR:
             #residuals by optimizing the log marginal likelihood with respect to a1 and a2 
             res =optimize.minimize(self.log_ml_minnesota, init_params, args=(X, Y, a3, sigmas, sigmas_x),bounds=[(np.log(0.01), np.log(0.3)), (np.log(0.01), np.log(0.5))])
             #get optimal a1 and a2 by exponentiating the log values
-            a1, a2=np.exp(res.x)
+            #a1, a2=np.exp(res.x)
+            a1=0.05
+            a2=0.025
             #create dummy observations based on final lambda
             X_dum, Y_dum= self.minnesota_dummies(a1, a2,a3, sigmas, sigmas_x)
             

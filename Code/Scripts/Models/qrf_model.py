@@ -49,7 +49,7 @@ def run_experiment(config):
     df =pd.read_csv(data_path, index_col='Date', parse_dates=True)
     data_yoy_path=project_root/ "Data"/ "Cleaned_Data"/"data_yoy.csv"
     df_yoy=pd.read_csv(data_yoy_path, index_col='Date', parse_dates=True)
-    
+        
     #get target variables and forecast horizon from the config file
     targets=config['data']['targets']
     horizons=config['data']['horizons']
@@ -126,17 +126,17 @@ def run_experiment(config):
                 #fit standard scaler recursively
                 scaler= StandardScaler()
                 #avoid dataleakage: fit only on training data
-                X_train= pd.DataFrame(scaler.fit_transform(X_train), 
-                                              columns=X_train.columns, index=X_train.index)
-                X_test= pd.DataFrame(scaler.transform(X_test), 
-                                             columns=X_test.columns, index=X_test.index)
+                X_train= pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+                X_test= pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
 
                 #if configured to use residual forecasting
-                # --- Improved Residual/Extrapolation Logic ---
                 if use_residuals:
                     #data already scaled in preprocessing 
                     #define rolling window for structural breaks: 5y=60months
-                    window_size= 120 if h>= 9 else 90
+                    if h>=9:
+                        window_size=120
+                    else:
+                        window_size=90
                     #CV-> best alpha but shouldn't fit on data from 20 years ago if there is a break
                     #->limit the training data to the rolling window for the fit
                     if len(X_train)> window_size:
@@ -153,7 +153,7 @@ def run_experiment(config):
                         #grid search for best alpha
                         if h >= 12:
                             # Force stronger regularization for long horizons to push the linear model toward a "Mean" forecast
-                            en_params = {'alpha': [50.0,100.0, 500.0],'l1_ratio': [0.05,0.1, 0.3, 0.5] } 
+                            en_params = {'alpha': [50.0,100.0, 500.0],'l1_ratio': [ 0.5, 0.7, 0.9] } 
                         else:
                             en_params = {'alpha': [0.1, 1.0, 10.0, 50.0],'l1_ratio': [0.1, 0.3, 0.5]}
 
@@ -166,18 +166,42 @@ def run_experiment(config):
                         best_ridge =grid_search.best_estimator_                        
                     else:
                         #fallback if too little data for CV: just take default alpha and fit on all data
-                        best_ridge=ElasticNet(alpha=0.1).fit(X_train_recent, Y_train_recent)
-                    #train residuals (in-sample) & apply model to full history for QRF
-                    train_linear_preds= best_ridge.predict(X_train)
-                    Y_train_effective= Y_train -train_linear_preds                    
-                    #test preds
-                    test_linear_preds=best_ridge.predict(X_test)
-                    #get shapley values for linear part to add to the results later
-                    linear_coeffs = dict(zip(X_train.columns, best_ridge.coef_))
-                    shap_linear= shap_values(model_obj=None, X_input=X_test, X_train=X_train_recent, model_type='linear', linear_coeffs=linear_coeffs, linear_const=best_ridge.intercept_)
-                        
+                        best_ridge= Ridge(alpha=1.0).fit(X_train_recent, Y_train_recent)
+                    meta_kf =TimeSeriesSplit(n_splits=5)
+                    try:
+                        linear_feat_train = cross_val_predict(best_ridge, X_train_recent, Y_train_recent, cv=meta_kf)
+                    except:
+                        # Fallback if too small
+                        linear_feat_train = best_ridge.predict(X_train_recent)
+
+                    # Create a Series for the feature
+                    linear_feature_series = pd.Series(linear_feat_train, index=X_train_recent.index)
+                    
+                    # Align: We only train the QRF on the data where we have this linear feature
+                    # (effectively reducing QRF training size to window_size, which is usually good for regime shifts)
+                    X_train_final = X_train_recent.copy()
+                    Y_train_final = Y_train_recent.copy()
+                    
+                    # Add the Linear Prediction as a new column "Linear_Pred"
+                    X_train_final['Linear_Pred'] = linear_feature_series
+
+                    # C. Generate Prediction for Test Set
+                    test_linear_pred = best_ridge.predict(X_test)
+                    X_test_final = X_test.copy()
+                    X_test_final['Linear_Pred'] = test_linear_pred
+                    
+                    # No residual modification!
+                    Y_train_effective = Y_train_final
+                    
+                    # For SHAP, we now have an extra feature "Linear_Pred"
+                    # We don't need to add `test_linear_preds` manually at the end
+                    linear_add = 0 
+                    
                 else: #normal qrf forecasting
+                    X_train_final = X_train
+                    X_test_final = X_test
                     Y_train_effective= Y_train
+                    linear_add = 0
                     test_linear_preds=np.zeros(len(X_test))  #no linear effect to add later
 
 
@@ -187,32 +211,31 @@ def run_experiment(config):
                 model_args['random_state']=42
                 #train model
                 model= RandomForestQuantileRegressor(**model_args)
-                model.fit(X_train, Y_train_effective)
+                model.fit(X_train_final, Y_train_effective)
                 #predict key quantiles for evaluation and plotting
                 plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
-                preds_plot=model.predict(X_test, quantiles=list(plot_quantiles))    #pre safe the predictions
-                #get linear additve part if residual forecasting
-                linear_add = test_linear_preds.reshape(-1, 1)
+                preds_plot=model.predict(X_test_final, quantiles=list(plot_quantiles))    #pre safe the predictions
+                
                 #predict dense grid for CRPS and fan charts
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
-                preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
+                preds_dense = model.predict(X_test_final, quantiles=list(eval_quantiles))
                 #add linear part if residual forecasting
                 preds_plot+= (linear_add)
                 preds_dense+= (linear_add)
                 #calculate shapley values for the qrf tree part
-                shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
+                shap_tree= shap_values(model, X_test_final, X_train=X_train_final,model_type='tree')
                 #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
                 shap_combined= shap_tree.copy()
                 #combine shap values if residual forecasting
-                if use_residuals:
+                #if use_residuals:
                     #merge keys
-                    all_keys= set(shap_tree.keys()) | set(shap_linear.keys()) 
+                    #all_keys= set(shap_tree.keys()) | set(shap_linear.keys()) 
                     #look through keys
-                    for k in all_keys:
+                    #for k in all_keys:
                         #sum values, get 0 if key missing
-                        tree_val= shap_tree.get(k, 0.0)  #tree part
-                        linear_val= shap_linear.get(k, 0.0)  #linear part
-                        shap_combined[k]= tree_val + linear_val  #combine                
+                        #tree_val= shap_tree.get(k, 0.0)  #tree part
+                        #linear_val= shap_linear.get(k, 0.0)  #linear part
+                        #shap_combined[k]= tree_val + linear_val  #combine                
                 #check if target date exists in df_yoy (if not, cannot evaluate)
                 if target_date in df_yoy.index:
                         

@@ -83,6 +83,16 @@ def run_experiment(config):
             #get date
             forecast_date= df_system.index[current_idx]
             target_date=forecast_date+pd.DateOffset(months=h)
+            #prepare training data up to current idx 
+            df_train = df_system.iloc[training_offset : (current_idx - h) + 1].dropna(subset=available_targets)
+            #initialize for standardization
+            scaler=StandardScaler()
+            #fit scaler on training data predictors
+            df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
+                
+            #initialize and fit BVAR model
+            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
+            model.fit(df_train) #on scaled data
             #skip if not a training and forecasting month 
             if forecast_date.month not in snb_months:
                 current_idx += 1
@@ -96,16 +106,7 @@ def run_experiment(config):
             if train_end_idx< lags: # Need enough data for lags
                 current_idx+= 1
                 continue
-            #prepare training data up to current idx 
-            df_train = df_system.iloc[training_offset : (current_idx - h) + 1].dropna(subset=available_targets)
-            #initialize for standardization
-            scaler=StandardScaler()
-            #fit scaler on training data predictors
-            df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
-                
-            #initialize and fit BVAR model
-            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
-            model.fit(df_train) #on scaled data
+            
             #def test set and include enough previous obs for lags
             X_test= df_system.iloc[current_idx- lags : current_idx+ 1]
             #transform test set with scaler fitted on training data

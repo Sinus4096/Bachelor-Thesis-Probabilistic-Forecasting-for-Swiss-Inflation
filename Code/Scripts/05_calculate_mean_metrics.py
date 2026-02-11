@@ -34,4 +34,3 @@ summary_df = pd.DataFrame(all_results)
 # Sort for better scannability (Headline vs Core and Horizons)
 summary_df = summary_df
 print(summary_df.to_string(index=False))
-
