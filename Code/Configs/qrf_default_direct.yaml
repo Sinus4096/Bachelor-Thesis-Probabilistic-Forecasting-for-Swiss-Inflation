@@ -6,7 +6,7 @@ data:
   targets: ["Headline", "Core"]
   horizons: [3, 6, 9, 12]
   evaluation_scheme: "expanding_window"
-  eval_start_date: "2013-07-01"
+  eval_start_date: "2012-07-01"
   retrain_step_months: 3
   data_file: "data_stationary_direct.csv"  #use 2. preprocessed data
 

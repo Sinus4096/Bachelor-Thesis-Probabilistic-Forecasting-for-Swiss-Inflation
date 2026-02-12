@@ -29,21 +29,27 @@ class BVAR:
         X_raw= data[feature_cols].values
         #get number of variables and observations
         self.n_vars = Y_raw.shape[1]
+        self.n_exog= X_raw.shape[1] #nr exogenous features
         n_obs= len(data)
         
-        #define want lags 0, 1, 2, and 12
-        self.lag_indices =[0, 1, 2,3]
-        max_lag= 6  #biggest lag
+        #define want lags 0, 1, 2
+        self.lag_indices =[0, 1]
+        max_lag= 2  #biggest lag
         #if less obs than max lag +1 -> cannot create lagged features-> raise error
         if n_obs <= max_lag:
             raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires at least 13 observations.")
         #initialize list to store lagged features
         X_list= []
+        #identify which cols are targets vs features for prior
+        self.feature_type_map =[] 
         #loop through lags and create lagged features
         for lag in self.lag_indices:
             start= max_lag -lag  #start point for this lag
             end =n_obs- lag     #end point for this lag
             X_list.append(X_raw[start:end, :])  #append lagged features to list
+            self.feature_type_map.extend([0]* self.n_vars)  #mark lagged features as type 0 for prior purposes
+            X_list.append(Y_raw[start:end, :])     #append lagged targets
+            self.feature_type_map.extend([1] * self.n_exog)
         #combine lagged features
         X_combined=np.column_stack(X_list)
         #want to deduplicate if lags of different variables are the same
@@ -286,7 +292,7 @@ class BVAR:
             X_star=np.vstack([X_dum, X])
             #add jitter to diagonal to avoid multicolinearity proble
             XX= X_star.T @ X_star
-            jitter= np.eye(K)*1e-7   #tiny nudge to make positive definite
+            jitter= np.eye(K)*1e-4   #tiny nudge to make positive definite
             XX_stable =XX+jitter            
             #get precision matrix via cholesky for efficiency
             L_precision= np.linalg.cholesky(XX_stable)

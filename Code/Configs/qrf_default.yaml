@@ -8,7 +8,7 @@ data:
   horizons: [3, 6, 9, 12]   #comparison on predefined list of forecast horizons    
   #recursive updating settings (out-of-sample predictions like in ECB paper):
   evaluation_scheme: "expanding_window"
-  eval_start_date: "2013-07-01"     #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  eval_start_date: "2012-07-01"     #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
   retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
 
 #specify default model           
@@ -17,8 +17,8 @@ model:
   use_residual_forecasting: false  #don't predict on residuals
   density_method: "skew-t"
   params:
-    n_estimators: 500    #nr. of decision trees used: ECB used 500
-    min_samples_leaf: 10    #meinshausen and ECB proposed 10 by default
+    n_estimators: 1000    #nr. of decision trees used: ECB used 500
+    min_samples_leaf: 15    #meinshausen and ECB proposed 10 by default
     max_features:  0.33   #how many features tree allowed to look at   or sqrt???
     n_jobs: -1    #use all CPU power
     random_state: 42    #for reproducibility: seed

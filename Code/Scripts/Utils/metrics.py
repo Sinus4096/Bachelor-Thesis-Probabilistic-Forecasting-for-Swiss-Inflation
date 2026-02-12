@@ -4,7 +4,7 @@ from scipy.stats import nct
 from scipy.integrate import quad
 import shap
 import pandas as pd
-#approximation of crps for hyperparameter tuning in qrf-> evaluation of quantile predictions
+#evaluation of quantile predictions
 #-----------------------------
 def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):
     """
@@ -24,14 +24,6 @@ def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):
     #devide by nr of quantiles -> approx integral across distrib.
     return 2.0*(loss/len(quantiles))
 
-def qrf_crps_scorer(estimator, X, y):
-    """
-    custom scorer hyperparameter tuning"""
-    #define grid
-    q_grid=np.linspace(0.01, 0.99, 99) 
-    #generate quantile preds using qrf's weighted empirical cdf inversion
-    preds=estimator.predict(X, quantile=q_grid)
-    return -calculate_crps_quantile(y, preds, q_grid) #negative value bc scikit-learn wants to maximize
 
 
 

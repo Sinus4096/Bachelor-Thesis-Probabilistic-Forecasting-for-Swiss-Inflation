@@ -59,11 +59,11 @@ print(nans_per_column)
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
-#for i in [1, 2]:
-    #df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
-    #f_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
+for i in [1, 2]:
+    df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
+    df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
-
+#df_stationary.drop(columns=['headline_1m', 'core_1m'], inplace=True)  #drop the 1-month growth rates as we only want the lags as features
 
 #--------------------------
 #add Cycle features: sine/consine transformations
@@ -106,11 +106,7 @@ df_bvar= df_bvar.loc[start_date:]
 
 #cols_to_drop=['real_turnover', 'retail_turnover', 'kofbarometer', 'Manufacturing_EU', 'Business_Confidence_EU',  'headline_lag_1', 'core_lag_1']
 #df_stationary.drop(columns=cols_to_drop, inplace=True)
-#---------------------------
-#add time index feature for trend capture
-#---------------------------------
-#only for qrf model as bvar can capture trend via its priors
-df_stationary['time_index']= np.arange(len(df_stationary))
+
 
 #-----------------------------
 #cope with NA's

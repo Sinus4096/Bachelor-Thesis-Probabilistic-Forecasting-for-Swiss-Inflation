@@ -20,7 +20,7 @@ scripts_root = current_dir.parent.parent
 sys.path.insert(0, str(scripts_root))
 
 #import needed utils
-from Scripts.Utils.metrics import qrf_crps_scorer, calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
+from Scripts.Utils.metrics import calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
 
 
@@ -71,15 +71,18 @@ def run_experiment(config):
                 target_col= f"target_headline_{h}m" #set target_col as defined in script 03
                 yoy_col="Headline"  #evaluate headline data
                 yoy_raw="Headline_level"  #for conditional forecasts
+                #dont want cross lags
+                cross_lag_cols= [c for c in df.columns if 'core_lag' in c]
             else:
                 target_col=f"target_core_{h}m"
                 yoy_col="Core"  #evaluate core data
                 yoy_raw="Core_level"  #for conditional forecasts
+                cross_lag_cols = [c for c in df.columns if 'headline_lag' in c]
             #make sure df_stationary contains the forecast horizon
             if target_col not in df.columns:
                 continue
             #to follow the recursive testing, we don't drop rows where target_col is NAN but filter data available at that specific point in time:
-            target_cols_to_drop= [col for col in df.columns if 'target_' in col]    #don't want target variable in X later
+            target_cols_to_drop= [col for col in df.columns if 'target_' in col] +cross_lag_cols   #don't want target variable in X later
 
             final_params= config['model']['params']
             
