@@ -47,7 +47,7 @@ def run_experiment(config):
     #identify predictors
     predictor_cols= [col for col in df.columns if col not in target_names and 'target_' not in col] 
     #define 12-month burn-in period
-    training_offset=13
+    training_offset=14
     #set recursive (out-of-sampe) prediction windos (->when stop training and update after how many months)
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
     
@@ -86,13 +86,13 @@ def run_experiment(config):
             #prepare training data up to current idx 
             df_train = df_system.iloc[training_offset : (current_idx - h) + 1].dropna(subset=available_targets)
             #initialize for standardization
-            scaler=StandardScaler()
+            #scaler=StandardScaler()
             #fit scaler on training data predictors
-            df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
+            #df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
                 
             #initialize and fit BVAR model
             model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
-            model.fit(df_train) #on scaled data
+            model.fit(df_train, horizon=h) #on scaled data
             #skip if not a training and forecasting month 
             if forecast_date.month not in snb_months:
                 current_idx += 1
@@ -110,7 +110,7 @@ def run_experiment(config):
             #def test set and include enough previous obs for lags
             X_test= df_system.iloc[current_idx- lags : current_idx+ 1]
             #transform test set with scaler fitted on training data
-            X_test= pd.DataFrame(scaler.transform(X_test), index=X_test.index, columns=X_test.columns)
+            #X_test= pd.DataFrame(scaler.transform(X_test), index=X_test.index, columns=X_test.columns)
             #forecast
             preds_draws_all=model.forecast(X_test)
             
@@ -127,10 +127,10 @@ def run_experiment(config):
                 shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
                 #get scaler stats for shapley values
                 target_col_idx= df_system.columns.get_loc(target_col_name)  #get index of target col in system
-                target_mean= scaler.mean_[target_col_idx]  #get mean of target col from scaler
-                target_scale= scaler.scale_[target_col_idx]  #get scale of target col from scaler
+                #target_mean= scaler.mean_[target_col_idx]  #get mean of target col from scaler
+                #target_scale= scaler.scale_[target_col_idx]  #get scale of target col from scaler
                 #unscale the draws for evaluation and shapley value rescaling
-                preds_draws= (preds_draws*target_scale)+target_mean
+                #preds_draws= (preds_draws*target_scale)+target_mean
                 #get actual yoy value
                 actual_yoy=df_yoy.loc[target_date, var_name]
                 #to calc price levels need levelsof core and headline cpi
@@ -139,7 +139,7 @@ def run_experiment(config):
                 if h==12:
                     preds_draws_yoy=preds_draws
                     #shapley scaling: standard deviation
-                    shap_scaling = target_scale
+                    #shap_scaling = target_scale
                     base_shap_effect=0 #since we are forecasting the change from t-12 to t, the base effect is 0 (no change) and the shapley values show how much each feature contributes to deviating from this base effect
                 else:
                     #for h<12: combine history with deannualized model predictions
@@ -156,14 +156,14 @@ def run_experiment(config):
                     scaling_factor= h/12
                     preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
                     #shapley scaling: scale the shapley values by the same factor to reflect their contribution to the deannualized forecast
-                    shap_scaling= target_scale*scaling_factor
+                    #shap_scaling= target_scale*scaling_factor
                     base_shap_effect= base_effect  #the base effect is the deannualized change, and the shapley values show how much each feature contributes to deviating from this deannualized change
 
                 #rescale shapley values from standardized units to YoY units
                 final_shap={}                
-                for k, v in shap_dict.items():
+                #for k, v in shap_dict.items():
                     #scale back to original units 
-                    final_shap[k] =v*shap_scaling  
+                    #final_shap[k] =v*shap_scaling  
                 final_shap['Shap_Base_Effect'] = base_shap_effect
                 #calc CRPS
                 eval_quantiles= np.linspace(0.01, 0.99, 99)

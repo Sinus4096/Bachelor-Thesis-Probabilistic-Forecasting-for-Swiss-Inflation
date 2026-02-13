@@ -56,7 +56,7 @@ top_7_features = [
     'PPI', 
     'M3_change', 
     'Exchange_Rate_CHF', 
-    'Saron_Rate', 'kofbarometer', 'fin_spread', 'real_turnover', 'Manufacturing_EU', 'Wage_change', 'EU_fin_spread', 'M1_change',
+    #'Saron_Rate', 'kofbarometer', 'fin_spread', 'real_turnover', 'Manufacturing_EU', 'Wage_change', 'EU_fin_spread', 'M1_change',
     'headline_1m', 'core_1m','sin_cycle_1', 'cos_cycle_1',
        'sin_cycle_2', 'cos_cycle_2'
 ]

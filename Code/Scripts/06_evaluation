@@ -1,146 +1,483 @@
-import pandas as pd
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import os
 from scipy.stats import nct
 
-# --- CONFIGURATION ---
-base_path = 'Code/Results'
-data_type = 'Headline' 
-horizons = [3, 6, 9, 12]
-rolling_window = 12 
 
-# DEFINE THE 3 MODELS YOU WANT TO COMPARE
-# These should match the start of your filenames (e.g., 'Benchmark_ARGARCH', 'bvar_minnesota', 'qrf_default')
-models_to_plot = ['Benchmark_ARGARCH', 'bvar_minnesota', 'QRF_default'] 
+# ============================================================
+# CONFIG (only edit these)
+# ============================================================
 
-data_dict = {}
+DATA_TYPE = "Core"          # "Headline" or "Core"
+HORIZONS = [3, 6, 9, 12]        # months ahead
+ROLLING_WINDOW = 36             # 36 = ~3 years for monthly data
+CRPS_COL = "Parametric_CRPS"    # or "Empirical_CRPS"
 
-# --- DYNAMIC LOADING LOOP ---
-print("Scanning folders...")
-for root, dirs, files in os.walk(base_path):
-    for file in files:
-        if file.endswith('.csv') and data_type in file:
-            h_found = None
-            for h in horizons:
-                if f"_{h}m" in file:
-                    h_found = h
-                    break
-            
-            if h_found is not None:
-                # This identifies the model name by removing the suffix
-                model_name = file.replace(f'_{data_type}_{h_found}m.csv', '')
-                
-                file_path = os.path.join(root, file)
-                try:
-                    df = pd.read_csv(file_path, index_col='Date', parse_dates=True)
-                    if model_name not in data_dict:
-                        data_dict[model_name] = {}
-                    data_dict[model_name][h_found] = df
-                except Exception as e:
-                    print(f"Error loading {file}: {e}")
+# EXACTLY 3 models (used as columns in grids)
+# Matching rule: model key must appear in filename (case-insensitive, non-alnum ignored)
+models_compare= ["Benchmark_ARGARCH", "bvar_natural_niw_hierarchical","QRF_Default_Res"]
 
-print(f"Loaded models: {list(data_dict.keys())}")
+# If you want to restrict to specific subfolders under Results, set to [] to scan everything.
+RESULTS_SUBFOLDERS: List[str] = []
 
-# --- 1. PIT CALIBRATION (4x3 Grid) ---
-# Rows = Horizons, Columns = the 3 Models
-fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(15, 18), sharex=True, sharey=True)
 
-for i, h in enumerate(horizons):
-    for j, model in enumerate(models_to_plot):
-        ax = axes[i, j]
-        if model in data_dict and h in data_dict[model]:
-            df = data_dict[model][h]
-            pit_sorted = np.sort(df['PIT'].dropna())
-            n = len(pit_sorted)
-            y_vals = np.arange(1, n + 1) / n
-            
-            ax.plot(pit_sorted, y_vals, color='black', label='Empirical CDF')
-            ax.plot([0, 1], [0, 1], color='red', linestyle='--', alpha=0.7)
-            
-            # 95% Confidence Bands
-            ks_critical = 1.36 / np.sqrt(n)
-            ax.fill_between(np.linspace(0, 1, n), 
-                            np.clip(np.linspace(0, 1, n) - ks_critical, 0, 1),
-                            np.clip(np.linspace(0, 1, n) + ks_critical, 0, 1),
-                            color='gray', alpha=0.1)
+# ============================================================
+# PATH + FILENAME PARSING (robust to your repo structure)
+# ============================================================
 
-        if i == 0: ax.set_title(f'MODEL: {model}', fontweight='bold')
-        if j == 0: ax.set_ylabel(f'Horizon: {h}m\nCumulative Prob', fontweight='bold')
-        ax.grid(True, alpha=0.3)
+HORIZON_RE = re.compile(r"(?<!\d)(\d{1,2})m(?!\d)", re.IGNORECASE)
 
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-fig.suptitle(f'PIT Calibration Comparison ({data_type})', fontsize=16)
-plt.show()
+@dataclass(frozen=True)
+class FileMeta:
+    path: Path
+    model_key: str
+    variable: str   # "Headline" or "Core"
+    horizon: int
 
-# --- 2. ROLLING CRPS COMPARISON (2x2 Grid) ---
-# One subplot per horizon, all 3 models as lines inside
-fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(14, 10))
-axes = axes.flatten()
 
-colors = {models_to_plot[0]: 'red', models_to_plot[1]: 'black', models_to_plot[2]: 'blue'}
+def normalize(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
 
-for i, h in enumerate(horizons):
-    ax = axes[i]
-    for model in models_to_plot:
-        if model in data_dict and h in data_dict[model]:
-            df = data_dict[model][h]
-            rolling_crps = df['Parametric_CRPS'].rolling(window=rolling_window).mean()
-            ax.plot(df.index, rolling_crps, label=model, color=colors.get(model, 'gray'), linewidth=2)
-    
-    ax.set_title(f'Forecast Horizon: {h} Months', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Rolling CRPS')
-    ax.grid(True, alpha=0.3)
-    if i == 0: ax.legend()
 
-fig.suptitle(f'Predictive Performance (Rolling {rolling_window}-Period CRPS)', fontsize=16)
-plt.tight_layout()
-plt.show()
+def find_project_root(start: Path) -> Path:
+    """
+    Walk upward until a directory containing 'Code' is found.
+    Falls back to start if none found.
+    """
+    cur = start.resolve()
+    for _ in range(10):
+        if (cur / "Code").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return start.resolve()
 
-# --- 3. SUMMARY BAR CHART ---
-summary_data = []
-for model in models_to_plot:
-    for h in horizons:
-        if model in data_dict and h in data_dict[model]:
-            avg_score = data_dict[model][h]['Parametric_CRPS'].mean()
-            summary_data.append({'Model': model, 'Horizon': f'{h}m', 'Avg_CRPS': avg_score})
 
-df_summary = pd.DataFrame(summary_data)
-if not df_summary.empty:
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=df_summary, x='Horizon', y='Avg_CRPS', hue='Model', palette='viridis')
-    plt.title('Summary Performance: Average CRPS per Model and Horizon')
-    plt.ylabel('Mean CRPS (Lower is Better)')
+def find_actuals_file(project_root: Path) -> Path:
+    """
+    Find data_yoy.csv anywhere under the project root (case-insensitive).
+    Prefers paths containing 'Cleaned' and 'Data'.
+    """
+    candidates = list(project_root.rglob("data_yoy.csv"))
+    if not candidates:
+        # case-insensitive fallback
+        candidates = [p for p in project_root.rglob("*.csv") if p.name.lower() == "data_yoy.csv"]
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"Could not find 'data_yoy.csv' anywhere under {project_root}. "
+            f"Expected something like Code/Data/Cleaned_Data/data_yoy.csv."
+        )
+
+    def score(p: Path) -> int:
+        s = str(p).lower()
+        sc = 0
+        if "cleaned" in s: sc += 3
+        if "data" in s: sc += 2
+        if "code" in s: sc += 1
+        return sc
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[0]
+
+
+def parse_filename(path: Path, model_keys: List[str]) -> Optional[FileMeta]:
+    """
+    Identify (model, variable, horizon) from filename.
+    - variable: contains 'headline' or 'core'
+    - horizon: contains '3m', '6m', ...
+    - model: contains one of model_keys (normalized contains)
+    """
+    name = path.name
+    lname = name.lower()
+
+    # variable
+    if "headline" in lname:
+        variable = "Headline"
+    elif "core" in lname:
+        variable = "Core"
+    else:
+        return None
+
+    # horizon
+    mh = HORIZON_RE.search(name)
+    if not mh:
+        return None
+    horizon = int(mh.group(1))
+
+    # model match (best/longest normalized match)
+    n_name = normalize(name)
+    matched = None
+    best = -1
+    for key in model_keys:
+        nk = normalize(key)
+        if nk and nk in n_name and len(nk) > best:
+            best = len(nk)
+            matched = key
+    if matched is None:
+        return None
+
+    return FileMeta(path=path, model_key=matched, variable=variable, horizon=horizon)
+
+
+def dkw_band(n: int, alpha: float = 0.05) -> float:
+    # DKW: P(sup|Fn-F|>e) <= 2 exp(-2 n e^2)
+    if n <= 0:
+        return np.nan
+    return float(np.sqrt(np.log(2.0 / alpha) / (2.0 * n)))
+
+
+# ============================================================
+# LOADERS
+# ============================================================
+
+def load_actuals(actuals_path: Path, data_type: str) -> pd.Series:
+    df = pd.read_csv(actuals_path)
+    if "Date" not in df.columns:
+        raise ValueError(f"{actuals_path} must have a 'Date' column.")
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.set_index("Date").sort_index()
+
+    if data_type not in df.columns:
+        raise ValueError(f"{actuals_path} must have column '{data_type}'. Found: {list(df.columns)}")
+
+    return pd.to_numeric(df[data_type], errors="coerce")
+
+
+def load_forecast(path: Path, actuals: pd.Series) -> pd.DataFrame:
+    df = pd.read_csv(path)
+
+    for c in ["Date", "Target_date"]:
+        if c not in df.columns:
+            raise ValueError(f"{path.name}: missing required column '{c}'")
+
+    df["Date"] = pd.to_datetime(df["Date"])
+    df["Target_date"] = pd.to_datetime(df["Target_date"])
+
+    # overwrite/attach actual using target date
+    gt = df["Target_date"].map(actuals)
+    if "Actual" in df.columns:
+        df["Actual"] = np.where(gt.notna(), gt, pd.to_numeric(df["Actual"], errors="coerce"))
+    else:
+        df["Actual"] = gt
+
+    df = df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
+
+    # index by Target_date for evaluation plots
+    df = df.set_index("Target_date").sort_index()
+    return df
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main() -> None:
+    sns.set_theme(style="whitegrid")
+
+    script_dir = Path(__file__).resolve().parent
+    project_root = find_project_root(script_dir)
+
+    results_dir = project_root / "Code" / "Results"
+    if not results_dir.exists():
+        raise FileNotFoundError(f"Results directory not found: {results_dir}")
+
+    actuals_path = find_actuals_file(project_root)
+    print(f"[INFO] Project root: {project_root}")
+    print(f"[INFO] Results dir  : {results_dir}")
+    print(f"[INFO] Actuals file : {actuals_path}")
+
+    actuals = load_actuals(actuals_path, DATA_TYPE)
+
+    # data[model][horizon] = df
+    data: Dict[str, Dict[int, pd.DataFrame]] = {m: {} for m in models_compare}
+
+    # optionally restrict scan
+    scan_roots = [results_dir]
+    if RESULTS_SUBFOLDERS:
+        scan_roots = [(results_dir / s) for s in RESULTS_SUBFOLDERS]
+
+    found: List[FileMeta] = []
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("*.csv"):
+            meta = parse_filename(p, models_compare)
+            if meta is None:
+                continue
+            if meta.variable != DATA_TYPE:
+                continue
+            if meta.horizon not in HORIZONS:
+                continue
+            found.append(meta)
+
+    if not found:
+        raise RuntimeError(
+            "No matching forecast CSVs found.\n"
+            "Check that your filenames contain:\n"
+            "  - 'Headline' or 'Core'\n"
+            "  - horizon like '3m', '6m', '9m', '12m'\n"
+            f"  - and one of: {models_compare}\n"
+            f"Scanned: {scan_roots}"
+        )
+
+    errors = []
+    for meta in found:
+        try:
+            df = load_forecast(meta.path, actuals)
+            data[meta.model_key][meta.horizon] = df
+        except Exception as e:
+            errors.append((meta.path, str(e)))
+
+    print("\n[INFO] Loaded horizons per model:")
+    for m in models_compare:
+        print(f"  - {m}: {sorted(data[m].keys())}")
+
+    if errors:
+        print("\n[WARN] Some files failed to load (showing up to 15):")
+        for p, msg in errors[:15]:
+            print(f"  - {p}: {msg}")
+
+    # -----------------------------
+    # 1) PIT CALIBRATION GRID
+    # -----------------------------
+    fig, axes = plt.subplots(
+        nrows=len(HORIZONS),
+        ncols=len(models_compare),
+        figsize=(16, 18),
+        sharex=True, sharey=True,
+    )
+
+    for i, h in enumerate(HORIZONS):
+        for j, model in enumerate(models_compare):
+            ax = axes[i, j]
+            df = data.get(model, {}).get(h)
+
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.grid(True, alpha=0.25)
+
+            if i == 0:
+                ax.set_title(model, fontweight="bold")
+            if j == 0:
+                ax.set_ylabel(f"h={h}m\nECDF(PIT)", fontweight="bold")
+            if i == len(HORIZONS) - 1:
+                ax.set_xlabel("PIT")
+
+            if df is None or "PIT" not in df.columns:
+                ax.text(0.5, 0.5, "No PIT", ha="center", va="center")
+                continue
+
+            pit = pd.to_numeric(df["PIT"], errors="coerce").dropna().clip(0, 1).values
+            if pit.size < 5:
+                ax.text(0.5, 0.5, "Too few PITs", ha="center", va="center")
+                continue
+
+            pit_sorted = np.sort(pit)
+            n = pit_sorted.size
+            y = np.arange(1, n + 1) / n
+
+            ax.plot(pit_sorted, y, linewidth=1.8)
+            ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1.5)
+
+            eps = dkw_band(n, alpha=0.05)
+            u = np.linspace(0, 1, 300)
+            ax.plot(u, np.clip(u - eps, 0, 1), linestyle="--", linewidth=1.0)
+            ax.plot(u, np.clip(u + eps, 0, 1), linestyle="--", linewidth=1.0)
+
+    plt.suptitle(f"PIT Calibration – {DATA_TYPE}", fontsize=16, fontweight="bold", y=1.01)
+    plt.tight_layout()
     plt.show()
 
-# --- 4. SKEW-T DENSITY COMPARISON ---
-def plot_comparative_skew_t(target_date, horizon):
-    plt.figure(figsize=(10, 6))
-    actual_value = None
-    
-    for model in models_to_plot:
-        if model in data_dict and horizon in data_dict[model]:
-            df = data_dict[model][horizon]
-            if target_date in df.index:
-                row = df.loc[target_date]
-                actual_value = row['Actual']
-                
-                # Plot Skew-T PDF using NCT
-                x = np.linspace(row['loc_skewt'] - 4*row['scale_skewt'], row['loc_skewt'] + 4*row['scale_skewt'], 500)
-                pdf = nct.pdf(x, row['df_skewt'], row['nc_skewt'], loc=row['loc_skewt'], scale=row['scale_skewt'])
-                plt.plot(x, pdf, lw=2.5, label=model)
-                plt.fill_between(x, pdf, alpha=0.1)
-    
-    if actual_value is not None:
-        plt.axvline(actual_value, color='black', linestyle='--', label=f'Actual: {actual_value:.2f}')
+    # -----------------------------
+    # 2) ROLLING CRPS (2x2)
+    # -----------------------------
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    axes = axes.flatten()
 
-    plt.title(f'Predictive Density Comparison: {target_date.date()} ({horizon}m Horizon)')
-    plt.legend()
+    for idx, h in enumerate(HORIZONS):
+        ax = axes[idx]
+        any_line = False
+
+        for model in models_compare:
+            df = data.get(model, {}).get(h)
+            if df is None or CRPS_COL not in df.columns:
+                continue
+
+            s = pd.to_numeric(df[CRPS_COL], errors="coerce")
+            roll = s.rolling(window=ROLLING_WINDOW, min_periods=ROLLING_WINDOW).mean()
+            ax.plot(roll.index, roll.values, linewidth=2.0, label=model)
+            any_line = True
+
+        ax.set_title(f"{DATA_TYPE} – Rolling {CRPS_COL} (w={ROLLING_WINDOW}) – h={h}m", fontweight="bold")
+        ax.set_ylabel("Rolling mean CRPS")
+        ax.grid(True, alpha=0.25)
+        if any_line:
+            ax.legend()
+
+    for k in range(len(HORIZONS), 4):
+        axes[k].axis("off")
+
+    plt.tight_layout()
     plt.show()
 
-# Example usage for the last available date
-if models_to_plot[0] in data_dict:
-    last_date = data_dict[models_to_plot[0]][3].index[-1]
-    plot_comparative_skew_t(last_date, horizon=3)
+    # -----------------------------
+    # 3) AVG CRPS BAR
+    # -----------------------------
+    rows = []
+    for model in models_compare:
+        for h in HORIZONS:
+            df = data.get(model, {}).get(h)
+            if df is None or CRPS_COL not in df.columns:
+                continue
+            val = pd.to_numeric(df[CRPS_COL], errors="coerce").mean()
+            rows.append({"Model": model, "Horizon": f"{h}m", "Avg_CRPS": val})
 
+    df_sum = pd.DataFrame(rows)
+    if not df_sum.empty:
+        plt.figure(figsize=(12, 6))
+        sns.barplot(data=df_sum, x="Horizon", y="Avg_CRPS", hue="Model")
+        plt.title(f"Average {CRPS_COL} – {DATA_TYPE} (lower is better)", fontweight="bold")
+        plt.ylabel(f"Mean {CRPS_COL}")
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("[WARN] No CRPS summary plotted (missing CRPS column).")
+
+    # -----------------------------
+    # 4) FAN CHART GRID
+    # -----------------------------
+    MED_COL = "Forecast_median"
+    qcols = ["q05", "q16", "q84", "q95"]
+
+    fig, axes = plt.subplots(
+        nrows=len(HORIZONS),
+        ncols=len(models_compare),
+        figsize=(18, 14),
+        sharex=False, sharey=False
+    )
+
+    for i, h in enumerate(HORIZONS):
+        for j, model in enumerate(models_compare):
+            ax = axes[i, j]
+            df = data.get(model, {}).get(h)
+
+            if i == 0:
+                ax.set_title(model, fontweight="bold")
+            if j == 0:
+                ax.set_ylabel(f"h={h}m", fontweight="bold")
+
+            ax.grid(True, alpha=0.2)
+
+            if df is None or MED_COL not in df.columns:
+                ax.text(0.5, 0.5, "No median", ha="center", va="center")
+                continue
+
+            med = pd.to_numeric(df[MED_COL], errors="coerce")
+            act = pd.to_numeric(df["Actual"], errors="coerce") if "Actual" in df.columns else None
+
+            if act is not None:
+                ax.plot(act.index, act.values, linewidth=2.0, label="Actual")
+
+            ax.plot(med.index, med.values, linewidth=2.0, label="Median")
+
+            if all(c in df.columns for c in ["q16", "q84"]):
+                q16 = pd.to_numeric(df["q16"], errors="coerce")
+                q84 = pd.to_numeric(df["q84"], errors="coerce")
+                ax.fill_between(q16.index, q16.values, q84.values, alpha=0.20, label="16–84")
+
+            if all(c in df.columns for c in ["q05", "q95"]):
+                q05 = pd.to_numeric(df["q05"], errors="coerce")
+                q95 = pd.to_numeric(df["q95"], errors="coerce")
+                ax.fill_between(q05.index, q05.values, q95.values, alpha=0.12, label="05–95")
+
+            if i == 0 and j == 0:
+                ax.legend(loc="upper left")
+            else:
+                if ax.get_legend() is not None:
+                    ax.get_legend().remove()
+
+    plt.suptitle(f"Predictive Quantiles (Fan Charts) – {DATA_TYPE}", fontsize=16, fontweight="bold", y=1.01)
+    plt.tight_layout()
+    plt.show()
+
+    # -----------------------------
+    # 5) ONE ORIGIN DATE DENSITY COMPARISON
+    # -----------------------------
+    def plot_density_for_origin(origin_date: pd.Timestamp, horizon: int) -> None:
+        plt.figure(figsize=(12, 6))
+        any_plotted = False
+        actual_val = None
+
+        for model in models_compare:
+            df = data.get(model, {}).get(horizon)
+            if df is None or "Date" not in df.columns:
+                continue
+
+            rows = df[df["Date"] == origin_date]
+            if rows.empty:
+                continue
+
+            row = rows.iloc[0]
+            needed = ["df_skewt", "nc_skewt", "loc_skewt", "scale_skewt"]
+            if any(col not in rows.columns for col in needed):
+                continue
+
+            try:
+                df_sk = float(row["df_skewt"])
+                nc_sk = float(row["nc_skewt"])
+                loc = float(row["loc_skewt"])
+                scale = float(row["scale_skewt"])
+            except Exception:
+                continue
+
+            if "Actual" in rows.columns and pd.notna(row["Actual"]):
+                actual_val = float(row["Actual"])
+
+            x = np.linspace(loc - 4.0 * scale, loc + 4.0 * scale, 600)
+            pdf = nct.pdf(x, df_sk, nc_sk, loc=loc, scale=scale)
+            ax_label = model
+
+            plt.plot(x, pdf, linewidth=2.2, label=ax_label)
+            plt.fill_between(x, pdf, alpha=0.12)
+            any_plotted = True
+
+        if actual_val is not None:
+            plt.axvline(actual_val, linestyle="--", linewidth=2.0, label=f"Actual={actual_val:.2f}")
+
+        if not any_plotted:
+            plt.title(f"No densities available for origin={origin_date.date()} at h={horizon}m")
+            plt.legend()
+            plt.show()
+            return
+
+        plt.title(f"Predictive Density – {DATA_TYPE} – origin={origin_date.date()}, h={horizon}m", fontweight="bold")
+        plt.xlabel(f"{DATA_TYPE} YoY")
+        plt.ylabel("Density")
+        plt.grid(True, alpha=0.25)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    # Choose latest origin date from first model/horizon that exists
+    default_h = HORIZONS[0]
+    df0 = data.get(models_compare[0], {}).get(default_h)
+    if df0 is not None and "Date" in df0.columns:
+        latest_origin = pd.to_datetime(df0["Date"]).max()
+        plot_density_for_origin(latest_origin, horizon=default_h)
+    else:
+        print("[WARN] Skipping density plot (missing Date column or missing data).")
+
+
+if __name__ == "__main__":
+    main()

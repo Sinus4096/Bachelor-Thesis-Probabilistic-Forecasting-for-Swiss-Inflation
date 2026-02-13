@@ -11,7 +11,7 @@ import argparse
 from scipy.stats import nct
 from sklearn.linear_model import Ridge
 from sklearn.linear_model import ElasticNet
-from sklearn.pipeline import Pipeline
+
 
 #get path for utils
 current_dir=Path(__file__).resolve().parent
@@ -22,6 +22,7 @@ sys.path.insert(0, str(scripts_root))
 #import needed utils
 from Scripts.Utils.metrics import calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
+from Scripts.Utils.PCA import get_pca, make_factor_features_time_safe
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -41,7 +42,7 @@ def run_experiment(config):
     #want to know which one (default or tuning)
     print(f"run {config['experiment_name']}")
     #get which data to use from config file
-    data_filename=config['data'].get('data_file', 'data_stationary.csv')
+    data_filename=config['data'].get('data_file', 'data_stationary_bvar.csv')
     #load data
     project_root=current_dir.parent.parent
     #get path to selected data
@@ -62,6 +63,9 @@ def run_experiment(config):
     use_residuals = config['model'].get('use_residual_forecasting', False)
     #get forecast method from config file
     forecast_method = config['model'].get('forecast_method', 'reconstruct')
+    #get whether will use pca factors or not
+    use_pca_factors = bool(config.get("model", {}).get("use_pca_factors", False))
+
     #iterate through all targets 
     for target_name in targets:
         #iterate through all horizons defined in script 03
@@ -127,11 +131,27 @@ def run_experiment(config):
                 Y_train= Y_train.dropna()
                 X_train= X_train.loc[Y_train.index]
                 #fit standard scaler recursively
-                scaler= StandardScaler()
+                #scaler= StandardScaler()
                 #avoid dataleakage: fit only on training data
-                X_train= pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
-                X_test= pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+                #X_train= pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+                #X_test= pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+                if use_pca_factors:
+                    # Decide PCA block vs kept columns (AR + seasonals)
+                    pca_cols, keep_cols = get_pca(
+                        df_columns=X_train.columns,
+                        target_cols_to_drop=target_cols_to_drop,
+                        target_name=target_name,
+                        config=config
+                    )
 
+                    # Fit scaler+PCA on TRAIN only, transform TRAIN+TEST
+                    X_train, X_test, pca_info = make_factor_features_time_safe(
+                        X_train=X_train,
+                        X_test=X_test,
+                        pca_cols=pca_cols,
+                        keep_cols=keep_cols,
+                        config=config
+                    )
                 #if configured to use residual forecasting
                 if use_residuals:
                     #data already scaled in preprocessing 
@@ -152,7 +172,7 @@ def run_experiment(config):
                     n_splits_dynamic =min(5, len(X_train_recent) - 2)
                     if n_splits_dynamic > 1:
                         #TimeSeriesSplit with max_train_size creates rolling effect, validate 1 step ahead
-                        tscv_rolling = TimeSeriesSplit(n_splits=n_splits_dynamic, test_size=h, max_train_size=window_size)
+                        tscv_rolling = TimeSeriesSplit(n_splits=n_splits_dynamic, test_size=h, gap=h, max_train_size=window_size)
                         #grid search for best alpha
                         if h >= 12:
                             # Force stronger regularization for long horizons to push the linear model toward a "Mean" forecast

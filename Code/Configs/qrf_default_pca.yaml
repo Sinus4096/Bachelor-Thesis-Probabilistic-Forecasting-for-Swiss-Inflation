@@ -1,5 +1,6 @@
+  
 #config file to run the default qrf used by the ecb and proposed by Meinshausen
-experiment_name: "QRF_Default"
+experiment_name: "QRF_Default_PCA"
 model_type: "qrf"
 
 #define the data used in the experiment
@@ -13,8 +14,14 @@ data:
 
 #specify default model           
 model:
-  tune_hyperparameters: false    #use the default model
   use_residual_forecasting: false  #don't predict on residuals
+  use_pca_factors: true   #use pca factor to use less features
+  pca:
+    max_factors: 10
+    r_method: "kaiser"         # "kaiser" | "fixed"
+    r_fixed: 4                 # used if r_method == "fixed"
+    keep_ar: true              # keep headline_1m / core_1m outside PCA
+    keep_seasonals: true       # keep sin/cos outside PCA
   density_method: "skew-t"
   params:
     n_estimators: 1000    #nr. of decision trees used: ECB used 500 but meinshausen recommended 1000
@@ -22,7 +29,3 @@ model:
     max_features:  0.33   #how many features tree allowed to look at  
     n_jobs: -1    #use all CPU power
     random_state: 42    #for reproducibility: seed
-
-
-
-
