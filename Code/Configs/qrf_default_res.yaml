@@ -13,9 +13,10 @@ data:
 
 #specify default model           
 model:
-  tune_hyperparameters: false    #use the default model
   use_residual_forecasting: true   #run the model on residuals using ridge
+  use_pca_factors: false
   density_method: "skew-t"
+
   
   
   params:

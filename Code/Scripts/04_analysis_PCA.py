@@ -125,21 +125,3 @@ plt.tight_layout()
 
 #-> this analysis justifies the use of PCA to shrink our number of features
 
-#
-#--------------------------------------
-
-
-# Fit PCA
-pca = PCA()
-F = pca.fit_transform(X_std)  #use standardized data
-
-# Eigenvalues
-eigenvalues = pca.explained_variance_
-explained_ratio = pca.explained_variance_ratio_
-cum_explained = np.cumsum(explained_ratio)
-
-print("Eigenvalues:\n", eigenvalues)
-print("Explained variance ratio:\n", explained_ratio)
-print("Cumulative explained variance:\n", cum_explained)
-
-

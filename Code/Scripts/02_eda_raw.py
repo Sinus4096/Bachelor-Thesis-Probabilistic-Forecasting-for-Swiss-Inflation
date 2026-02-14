@@ -58,9 +58,10 @@ for ax in axes:
 fig.suptitle('Consumer Price Index (CPI) Trends', fontsize=20, fontweight='bold', y=0.98)
 axes[1].set_xlabel('Date', fontweight='bold', labelpad=10)
 
-#plot
+#plot and save
 plt.tight_layout(rect=[0, 0, 1, 0.96]) 
-plt.show()
+save_name=f"Code/Scripts/Plots/02_eda_raw/Time_Series_CPI.png"
+plt.savefig(save_name, dpi=300)
 #observations:
 #there is a clear long-term upward trend in both Core and Headline CPI, showing a steady increase in price levels from 2000 through 2024.
 #the Headline CPI exhibits more frequent, jagged fluctuations compared to the Core CPI, likely reflecting the volatile nature of food and energy
@@ -101,7 +102,8 @@ for spine in ['top', 'right', 'left']:  #clean spines
     ax2.spines[spine].set_visible(False)
 ax2.grid(axis='x', alpha=0.3)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.show()
+save_name=f"Code/Scripts/Plots/02_eda_raw/YoY_CPI_w_distrib.png"
+plt.savefig(save_name, dpi=300)
 
 
 
@@ -121,33 +123,26 @@ for fig_idx, chunk in enumerate(chunks):
     #def grid of plots
     n_cols=3
     n_rows =math.ceil(len(chunk) /n_cols)
-    
     #create figure
     fig, axes =plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(18, n_rows*3.5), constrained_layout=True)
     #flatten the axis and define color
     axes_flat =axes.flatten()
     x_color='#4C72B0'
-
     for i, var_name in enumerate(chunk):
         ax=axes_flat[i]
-        
         #drop the na's (before 2001) and plot
         series =df[var_name].dropna()
         ax.plot(series.index, series.values, label='Raw Level', linewidth=2, color=x_color)
         ax.fill_between(series.index, series.values, color=x_color, alpha=0.1)      #fill underneath the line
-
-        
         #style
         ax.set_title(var_name, fontweight='bold', fontsize=13, loc='left', pad=10)
         ax.tick_params(axis='both', which='major', labelsize=10)
-        
         #clean
         for spine in ['top', 'right', 'left']:
             ax.spines[spine].set_visible(False)
         #make nicer: grid and legend
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
         ax.legend(frameon=True, loc='upper left', fontsize='small')
-
     #delete the created subplots we dont use
     for j in range(len(chunk), len(axes_flat)):
         fig.delaxes(axes_flat[j])
@@ -155,7 +150,8 @@ for fig_idx, chunk in enumerate(chunks):
     #figure title for both chunks
     fig.suptitle(f'Economic Indicators Trends (Part {fig_idx +1})', fontsize=22, fontweight='bold')
 
-    plt.show()
+    save_name=f"Code/Scripts/Plots/02_eda_raw/Time_Series_features{fig_idx +1}.png"
+    plt.savefig(save_name, dpi=300)
 
 
 
@@ -205,6 +201,8 @@ pd.options.display.float_format ='{:.4f}'.format
 #reorder cols
 cols= ['mean', 'std', 'min', '50%', 'max', 'extreme_outliers', 'outlier_pct']
 #print
+save_name=f"Code/Scripts/Plots/02_eda_raw/stats_and_outlier_insp.csv"
+stats[cols].to_csv(save_name) 
 print(stats[cols])
 
 #observations:
@@ -310,7 +308,8 @@ for start_idx in range(0, len(all_vars), vars_per_fig):
     fig.suptitle(f'ACF & PACF Plots of all Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    plt.show()
+    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_initial_{chunk_nr}.png"
+    plt.savefig(save_name, dpi=300)
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
 
@@ -378,6 +377,8 @@ adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results: ")
 print(adf_table) 
+save_name=f"Code/Scripts/Plots/02_eda_raw/ADF_initial.csv"
+adf_table.to_csv(save_name) 
 
 #--------------------------------
 #decisions for critical cases and general summary
@@ -427,8 +428,8 @@ df_growth[gdp_vars]= np.log(df[gdp_vars]).diff(3).dropna()*100
 
 #start the plotting to see if there is seasonal pattern now:
 #set colors nicer than before because those come into thesis
-MAIN_COLOR= '#2E4053'  
-CI_COLOR= '#AED6F1'
+main_color= '#2E4053'  
+ci_color= '#AED6F1'
 #restrict number of figures to 5
 vars_per_fig=4
 #def chunknr for title
@@ -436,14 +437,11 @@ chunk_nr=1
 
 #loop through variables in chunks to plot acf/pacf
 for start_idx in range(0, len(growth_vars), vars_per_fig):
-    
     #def current chunk
     chunk=growth_vars[start_idx: start_idx+vars_per_fig]
     n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
-    
     #create figure 
     fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
-    
     #loop through vars in chunk
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
@@ -451,9 +449,9 @@ for start_idx in range(0, len(growth_vars), vars_per_fig):
         #clean name for title
         clean_name =var_name.replace('target_', '').replace('_', ' ').title()
         #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=MAIN_COLOR, vlines_kwargs={"colors": MAIN_COLOR, "linewidth": 1.5}, alpha=0.05, title=f"ACF: {clean_name}")
+        plot_acf(series, ax=axes[i, 0], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5}, alpha=0.05, title=f"ACF: {clean_name}")
         #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=MAIN_COLOR, vlines_kwargs={"colors": MAIN_COLOR, "linewidth": 1.5},alpha=0.05, title=f"PACF: {clean_name}")
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5},alpha=0.05, title=f"PACF: {clean_name}")
         
         #styling
         for ax in axes[i]:
@@ -461,13 +459,14 @@ for start_idx in range(0, len(growth_vars), vars_per_fig):
                 ax.spines['right'].set_visible(False)
                 ax.set_ylim(-1.1, 1.1)
                 if len(ax.collections) >1:
-                    ax.collections[1].set_color(CI_COLOR)
+                    ax.collections[1].set_color(ci_color)
                     ax.collections[1].set_alpha(0.3)
     #figure title for all chunks
     fig.suptitle(f'ACF & PACF Plots of Detrended Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    plt.show()
+    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_detrended_{chunk_nr}.png"
+    plt.savefig(save_name, dpi=300)
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
 #observations:
@@ -504,25 +503,27 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df_growth[var_name].dropna()
-        
+        #clean name for title
+        clean_name =var_name.replace('target_', '').replace('_', ' ').title()
         #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
+        plot_acf(series, ax=axes[i, 0], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5}, alpha=0.05, title=f"ACF: {clean_name}")
         #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5},alpha=0.05, title=f"PACF: {clean_name}")
         
         #styling
         for ax in axes[i]:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            ax.set_ylim(-1.1, 1.1)
-            ax.tick_params(axis='both', which='major', labelsize=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.set_ylim(-1.1, 1.1)
+                if len(ax.collections) >1:
+                    ax.collections[1].set_color(ci_color)
+                    ax.collections[1].set_alpha(0.3)
     #figure title for all chunks
     fig.suptitle(f'ACF & PACF Plots of Annualized Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    plt.show()
+    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_annualized_CPI{chunk_nr}.png"
+    plt.savefig(save_name, dpi=300)
     chunk_nr+=1
 
 #see whether lags after lag 2 in pacf plot are from seasonality rather than trend-> difference (won't do to preprocess but needed
@@ -547,25 +548,27 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     for i, var_name in enumerate(chunk):
         #get data and drop NA's (before 2001)
         series=df_growth[var_name].dropna()
-        
+        #clean name for title
+        clean_name =var_name.replace('target_', '').replace('_', ' ').title()
         #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
+        plot_acf(series, ax=axes[i, 0], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5}, alpha=0.05, title=f"ACF: {clean_name}")
         #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
+        plot_pacf(series, ax=axes[i, 1], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5},alpha=0.05, title=f"PACF: {clean_name}")
         
         #styling
         for ax in axes[i]:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            ax.set_ylim(-1.1, 1.1)
-            ax.tick_params(axis='both', which='major', labelsize=10)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.set_ylim(-1.1, 1.1)
+                if len(ax.collections) >1:
+                    ax.collections[1].set_color(ci_color)
+                    ax.collections[1].set_alpha(0.3)
     #figure title for all chunks
     fig.suptitle(f'ACF & PACF Plots of Annualized and Differenced Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    plt.show()
+    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_annualized_differenced_CPI{chunk_nr}.png"
+    plt.savefig(save_name, dpi=300)
     chunk_nr+=1
 #acf:data still has long-term cyclicality (eg business cycles)
 #pacf 3m: lag at 4, 12m lat at 12 still significant, probably due to how annualized rates are calculated
@@ -587,7 +590,9 @@ for col in df_growth.columns:
 adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results for Trending Variables: ")
-print(adf_table) 
+print(adf_table)
+save_name=f"Code/Scripts/Plots/02_eda_raw/ADF_final.csv"
+adf_table.to_csv(save_name) 
 #remark:with experimetning, we can see that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
 #as the acf shows clear seasonal spikes when taking diff alone it's not stationary either
 #decision for CPI: like reference paper see word document.

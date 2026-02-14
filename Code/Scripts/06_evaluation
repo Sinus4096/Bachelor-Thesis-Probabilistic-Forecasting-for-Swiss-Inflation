@@ -16,18 +16,18 @@ from scipy.stats import nct
 # ============================================================
 # CONFIG (only edit these)
 # ============================================================
-
-DATA_TYPE = "Core"          # "Headline" or "Core"
-HORIZONS = [3, 6, 9, 12]        # months ahead
-ROLLING_WINDOW = 36             # 36 = ~3 years for monthly data
-CRPS_COL = "Parametric_CRPS"    # or "Empirical_CRPS"
+#what to compare
+data_type= "Headline"   #plot core or headline in comparison
+horizons = [3, 6, 9, 12]     #comparison at all horizons ahead
+rolling_window =36   #36= ca 3 years for monthly data
+crps_col = "Parametric_CRPS"    # or "Empirical_CRPS"
 
 # EXACTLY 3 models (used as columns in grids)
 # Matching rule: model key must appear in filename (case-insensitive, non-alnum ignored)
-models_compare= ["Benchmark_ARGARCH", "bvar_natural_niw_hierarchical","QRF_Default_Res"]
+models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical","QRF_Default_Res_PCA"]
 
 # If you want to restrict to specific subfolders under Results, set to [] to scan everything.
-RESULTS_SUBFOLDERS: List[str] = []
+results_subfolder: List[str] = []
 
 
 # ============================================================
@@ -197,15 +197,15 @@ def main() -> None:
     print(f"[INFO] Results dir  : {results_dir}")
     print(f"[INFO] Actuals file : {actuals_path}")
 
-    actuals = load_actuals(actuals_path, DATA_TYPE)
+    actuals = load_actuals(actuals_path, data_type)
 
     # data[model][horizon] = df
     data: Dict[str, Dict[int, pd.DataFrame]] = {m: {} for m in models_compare}
 
     # optionally restrict scan
     scan_roots = [results_dir]
-    if RESULTS_SUBFOLDERS:
-        scan_roots = [(results_dir / s) for s in RESULTS_SUBFOLDERS]
+    if results_subfolder:
+        scan_roots = [(results_dir / s) for s in results_subfolder]
 
     found: List[FileMeta] = []
     for root in scan_roots:
@@ -215,9 +215,9 @@ def main() -> None:
             meta = parse_filename(p, models_compare)
             if meta is None:
                 continue
-            if meta.variable != DATA_TYPE:
+            if meta.variable != data_type:
                 continue
-            if meta.horizon not in HORIZONS:
+            if meta.horizon not in horizons:
                 continue
             found.append(meta)
 
@@ -252,13 +252,13 @@ def main() -> None:
     # 1) PIT CALIBRATION GRID
     # -----------------------------
     fig, axes = plt.subplots(
-        nrows=len(HORIZONS),
+        nrows=len(horizons),
         ncols=len(models_compare),
         figsize=(16, 18),
         sharex=True, sharey=True,
     )
 
-    for i, h in enumerate(HORIZONS):
+    for i, h in enumerate(horizons):
         for j, model in enumerate(models_compare):
             ax = axes[i, j]
             df = data.get(model, {}).get(h)
@@ -271,7 +271,7 @@ def main() -> None:
                 ax.set_title(model, fontweight="bold")
             if j == 0:
                 ax.set_ylabel(f"h={h}m\nECDF(PIT)", fontweight="bold")
-            if i == len(HORIZONS) - 1:
+            if i == len(horizons) - 1:
                 ax.set_xlabel("PIT")
 
             if df is None or "PIT" not in df.columns:
@@ -295,7 +295,7 @@ def main() -> None:
             ax.plot(u, np.clip(u - eps, 0, 1), linestyle="--", linewidth=1.0)
             ax.plot(u, np.clip(u + eps, 0, 1), linestyle="--", linewidth=1.0)
 
-    plt.suptitle(f"PIT Calibration – {DATA_TYPE}", fontsize=16, fontweight="bold", y=1.01)
+    plt.suptitle(f"PIT Calibration – {data_type}", fontsize=16, fontweight="bold", y=1.01)
     plt.tight_layout()
     plt.show()
 
@@ -305,27 +305,27 @@ def main() -> None:
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     axes = axes.flatten()
 
-    for idx, h in enumerate(HORIZONS):
+    for idx, h in enumerate(horizons):
         ax = axes[idx]
         any_line = False
 
         for model in models_compare:
             df = data.get(model, {}).get(h)
-            if df is None or CRPS_COL not in df.columns:
+            if df is None or crps_col not in df.columns:
                 continue
 
-            s = pd.to_numeric(df[CRPS_COL], errors="coerce")
-            roll = s.rolling(window=ROLLING_WINDOW, min_periods=ROLLING_WINDOW).mean()
+            s = pd.to_numeric(df[crps_col], errors="coerce")
+            roll = s.rolling(window=rolling_window, min_periods=rolling_window).mean()
             ax.plot(roll.index, roll.values, linewidth=2.0, label=model)
             any_line = True
 
-        ax.set_title(f"{DATA_TYPE} – Rolling {CRPS_COL} (w={ROLLING_WINDOW}) – h={h}m", fontweight="bold")
+        ax.set_title(f"{data_type} – Rolling {crps_col} (w={rolling_window}) – h={h}m", fontweight="bold")
         ax.set_ylabel("Rolling mean CRPS")
         ax.grid(True, alpha=0.25)
         if any_line:
             ax.legend()
 
-    for k in range(len(HORIZONS), 4):
+    for k in range(len(horizons), 4):
         axes[k].axis("off")
 
     plt.tight_layout()
@@ -336,19 +336,19 @@ def main() -> None:
     # -----------------------------
     rows = []
     for model in models_compare:
-        for h in HORIZONS:
+        for h in horizons:
             df = data.get(model, {}).get(h)
-            if df is None or CRPS_COL not in df.columns:
+            if df is None or crps_col not in df.columns:
                 continue
-            val = pd.to_numeric(df[CRPS_COL], errors="coerce").mean()
+            val = pd.to_numeric(df[crps_col], errors="coerce").mean()
             rows.append({"Model": model, "Horizon": f"{h}m", "Avg_CRPS": val})
 
     df_sum = pd.DataFrame(rows)
     if not df_sum.empty:
         plt.figure(figsize=(12, 6))
         sns.barplot(data=df_sum, x="Horizon", y="Avg_CRPS", hue="Model")
-        plt.title(f"Average {CRPS_COL} – {DATA_TYPE} (lower is better)", fontweight="bold")
-        plt.ylabel(f"Mean {CRPS_COL}")
+        plt.title(f"Average {crps_col} – {data_type} (lower is better)", fontweight="bold")
+        plt.ylabel(f"Mean {crps_col}")
         plt.tight_layout()
         plt.show()
     else:
@@ -361,13 +361,13 @@ def main() -> None:
     qcols = ["q05", "q16", "q84", "q95"]
 
     fig, axes = plt.subplots(
-        nrows=len(HORIZONS),
+        nrows=len(horizons),
         ncols=len(models_compare),
         figsize=(18, 14),
         sharex=False, sharey=False
     )
 
-    for i, h in enumerate(HORIZONS):
+    for i, h in enumerate(horizons):
         for j, model in enumerate(models_compare):
             ax = axes[i, j]
             df = data.get(model, {}).get(h)
@@ -407,7 +407,7 @@ def main() -> None:
                 if ax.get_legend() is not None:
                     ax.get_legend().remove()
 
-    plt.suptitle(f"Predictive Quantiles (Fan Charts) – {DATA_TYPE}", fontsize=16, fontweight="bold", y=1.01)
+    plt.suptitle(f"Predictive Quantiles (Fan Charts) – {data_type}", fontsize=16, fontweight="bold", y=1.01)
     plt.tight_layout()
     plt.show()
 
@@ -461,8 +461,8 @@ def main() -> None:
             plt.show()
             return
 
-        plt.title(f"Predictive Density – {DATA_TYPE} – origin={origin_date.date()}, h={horizon}m", fontweight="bold")
-        plt.xlabel(f"{DATA_TYPE} YoY")
+        plt.title(f"Predictive Density – {data_type} – origin={origin_date.date()}, h={horizon}m", fontweight="bold")
+        plt.xlabel(f"{data_type} YoY")
         plt.ylabel("Density")
         plt.grid(True, alpha=0.25)
         plt.legend()
@@ -470,13 +470,59 @@ def main() -> None:
         plt.show()
 
     # Choose latest origin date from first model/horizon that exists
-    default_h = HORIZONS[0]
+    default_h = horizons[0]
     df0 = data.get(models_compare[0], {}).get(default_h)
     if df0 is not None and "Date" in df0.columns:
         latest_origin = pd.to_datetime(df0["Date"]).max()
         plot_density_for_origin(latest_origin, horizon=default_h)
     else:
         print("[WARN] Skipping density plot (missing Date column or missing data).")
+
+
+# ============================================================
+# SHAP / INTERPRETABILITY CONFIG
+# ============================================================
+# If you have a "features" dataset with predictors by origin Date, set a filename hint.
+# The code will try to auto-find it under project root; if not found, scatters will be skipped.
+
+#get df
+path ='Code/Data/Cleaned_Data/data_stationary.csv'
+#df=pd.read_csv(path, index_col='Date', parse_dates=True)
+
+
+# Grouping for "Shapley Bars" (edit to match your variable names!)
+# These should correspond to SHAP column suffixes AFTER "Shap_".
+# Example: Shap_Euribor, Shap_Unemployment, Shap_InflExp...
+shap_group_map = {
+    "Real Activity": [
+        "Unemployment", "IP", "PMI", "GDP", "CapacityUtil", "RetailSales",
+    ],
+    "Wages": [
+        "WageGrowth", "UnitLaborCosts", "CompPerEmp",
+    ],
+    "Inflation Expectations": [
+        "InflExp", "SurveyExp", "Breakeven",
+    ],
+    "Financial Conditions": [
+        "Euribor", "TermSpread", "CreditSpread", "FX", "Equities",
+    ],
+    "Energy / Commodities": [
+        "Oil", "Gas", "Commodities",
+    ],
+    # Any SHAP variables not matched above will be grouped into "Other"
+}
+
+# For "Predictive Relationship (Shapley Scatters)" and "Functional Form" checks:
+shap_scatter_vars = ["Euribor", "Unemployment", "InflExp"]  # variable names as in features & shap suffix
+
+# Heatmap settings
+shap_heatmap_top_n = 60        # show top N variables by average |SHAP|
+shap_heatmap_freq = "Q"        # resample time index: "M", "Q", "A" etc. (monthly/quarterly/annual)
+shap_heatmap_value = "abs"     # "abs" for |shap|, or "raw" for signed shap
+
+# Skewness / tail-risk series smoothing
+tailrisk_rolling = 12  # months for smoothing; set 1 for none
+
 
 
 if __name__ == "__main__":

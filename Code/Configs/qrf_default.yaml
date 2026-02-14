@@ -13,7 +13,6 @@ data:
 
 #specify default model           
 model:
-  tune_hyperparameters: false    #use the default model
   use_residual_forecasting: false  #don't predict on residuals
   density_method: "skew-t"
   params:

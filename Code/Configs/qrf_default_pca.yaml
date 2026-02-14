@@ -17,7 +17,7 @@ model:
   use_residual_forecasting: false  #don't predict on residuals
   use_pca_factors: true   #use pca factor to use less features
   pca:
-    max_factors: 10
+    max_factors: 5
     r_method: "kaiser"         # "kaiser" | "fixed"
     r_fixed: 4                 # used if r_method == "fixed"
     keep_ar: true              # keep headline_1m / core_1m outside PCA

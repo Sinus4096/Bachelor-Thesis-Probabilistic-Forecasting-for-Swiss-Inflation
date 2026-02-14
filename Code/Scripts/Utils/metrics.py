@@ -4,6 +4,7 @@ from scipy.stats import nct
 from scipy.integrate import quad
 import shap
 import pandas as pd
+from sklearn.base import clone
 #evaluation of quantile predictions
 #-----------------------------
 def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):

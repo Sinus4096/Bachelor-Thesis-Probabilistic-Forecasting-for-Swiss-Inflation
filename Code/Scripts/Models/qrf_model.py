@@ -3,14 +3,15 @@ import sys
 import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
-
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, GridSearchCV,  KFold, cross_val_predict
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, GridSearchCV,cross_val_predict
 from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from scipy.stats import nct
 from sklearn.linear_model import Ridge
 from sklearn.linear_model import ElasticNet
+from sklearn.decomposition import PCA
 
 
 #get path for utils
@@ -23,6 +24,7 @@ sys.path.insert(0, str(scripts_root))
 from Scripts.Utils.metrics import calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
 from Scripts.Utils.PCA import get_pca, make_factor_features_time_safe
+from Scripts.Utils.qrf_utils import generate_linear_feature_oof, get_pca, make_factor_features_time_safe
 
 
 #use config files in order to run once Meinshausens default qrf and once a qrf with hyperparameter tuning
@@ -34,6 +36,7 @@ def load_config(config_path):
     absolute_path = Path(config_path).resolve()
     with open(absolute_path, 'r') as f:
         return yaml.safe_load(f)
+
 
 
 
@@ -75,18 +78,15 @@ def run_experiment(config):
                 target_col= f"target_headline_{h}m" #set target_col as defined in script 03
                 yoy_col="Headline"  #evaluate headline data
                 yoy_raw="Headline_level"  #for conditional forecasts
-                #dont want cross lags
-                cross_lag_cols= [c for c in df.columns if 'core_lag' in c]
             else:
                 target_col=f"target_core_{h}m"
                 yoy_col="Core"  #evaluate core data
                 yoy_raw="Core_level"  #for conditional forecasts
-                cross_lag_cols = [c for c in df.columns if 'headline_lag' in c]
             #make sure df_stationary contains the forecast horizon
             if target_col not in df.columns:
                 continue
             #to follow the recursive testing, we don't drop rows where target_col is NAN but filter data available at that specific point in time:
-            target_cols_to_drop= [col for col in df.columns if 'target_' in col] +cross_lag_cols   #don't want target variable in X later
+            target_cols_to_drop= [col for col in df.columns if 'target_' in col]   #don't want target variable in X later
 
             final_params= config['model']['params']
             
@@ -97,7 +97,19 @@ def run_experiment(config):
             if isinstance(start_idx, slice):    #if get_loc returns slice->handle
                 start_idx= start_idx.start
             total_rows= len(df) #get length of the original df
-
+            if use_residuals:
+                linear_preds = generate_linear_feature_oof(
+                    df=df, 
+                    target_col=target_col, 
+                    target_cols_to_drop=target_cols_to_drop, 
+                    h=h, 
+                    config=config,              # <--- PASS CONFIG
+                    use_pca=use_pca_factors,    # <--- PASS PCA FLAG
+                    window_size=120, 
+                    min_train=40
+                )
+                
+                df['Linear_Pred'] = linear_preds
             #initialize the recursive loop and then iterate til to end of df
             current_idx= start_idx
             while current_idx <total_rows:
@@ -126,127 +138,68 @@ def run_experiment(config):
                 X_train= X_slice.iloc[train_indices].copy()  
                 Y_train= Y_slice.iloc[train_indices].copy()
                 X_test= X_slice.iloc[[current_idx]].copy()  #test input is features available today
+                lp_train = None
+                lp_test = None
+                
+                if 'Linear_Pred' in X_train.columns:
+                    # Save the column
+                    lp_train = X_train['Linear_Pred'].copy()
+                    lp_test = X_test['Linear_Pred'].copy()
+                    
+                    # Remove it from X_train/X_test so it doesn't get Scaled or PCA'd
+                    X_train = X_train.drop(columns=['Linear_Pred'])
+                    X_test = X_test.drop(columns=['Linear_Pred'])
                 #don't use df for testing /evaluating but the  yoy changes
+                
                 #only drop NAN's for the training set: test might have NAN's in the end-> inference
                 Y_train= Y_train.dropna()
                 X_train= X_train.loc[Y_train.index]
+                if lp_train is not None:
+                    lp_train = lp_train.loc[Y_train.index]
+                X_train_raw = X_train.copy()
+                X_test_raw = X_test.copy()
                 #fit standard scaler recursively
-                #scaler= StandardScaler()
-                #avoid dataleakage: fit only on training data
-                #X_train= pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
-                #X_test= pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+                scaler = StandardScaler()
+                X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
+                X_test = pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
                 if use_pca_factors:
-                    # Decide PCA block vs kept columns (AR + seasonals)
-                    pca_cols, keep_cols = get_pca(
-                        df_columns=X_train.columns,
-                        target_cols_to_drop=target_cols_to_drop,
-                        target_name=target_name,
-                        config=config
-                    )
-
-                    # Fit scaler+PCA on TRAIN only, transform TRAIN+TEST
-                    X_train, X_test, pca_info = make_factor_features_time_safe(
-                        X_train=X_train,
-                        X_test=X_test,
-                        pca_cols=pca_cols,
-                        keep_cols=keep_cols,
-                        config=config
-                    )
+                    #decide PCA block vs kept columns (AR + seasonals)
+                    pca_cols, keep_cols = get_pca(df_columns=X_train.columns, target_cols_to_drop=target_cols_to_drop, target_name=target_name, config=config)
+                    #fit scaler+PCA on train
+                    X_train, X_test, pca_info = make_factor_features_time_safe(X_train=X_train,  X_test=X_test, pca_cols=pca_cols,keep_cols=keep_cols,
+                    config=config, forecast_date=forecast_date, target_name=target_name, h=h, top_k=5,)
+                if lp_train is not None:
+                    # Concatenate back to the processed DataFrames
+                    X_train['Linear_Pred'] = lp_train
+                    X_test['Linear_Pred'] = lp_test
                 #if configured to use residual forecasting
                 if use_residuals:
-                    #data already scaled in preprocessing 
-                    #define rolling window for structural breaks: 5y=60months
-                    if h>=9:
-                        window_size=120
-                    else:
-                        window_size=90
-                    #CV-> best alpha but shouldn't fit on data from 20 years ago if there is a break
-                    #->limit the training data to the rolling window for the fit
-                    if len(X_train)> window_size:
-                        X_train_recent=X_train[-window_size:]
-                        Y_train_recent= Y_train.iloc[-window_size:]
-                    else:
-                        X_train_recent= X_train
-                        Y_train_recent=Y_train
-                    #ensure we have enough data for splits, else reduce splits
-                    n_splits_dynamic =min(5, len(X_train_recent) - 2)
-                    if n_splits_dynamic > 1:
-                        #TimeSeriesSplit with max_train_size creates rolling effect, validate 1 step ahead
-                        tscv_rolling = TimeSeriesSplit(n_splits=n_splits_dynamic, test_size=h, gap=h, max_train_size=window_size)
-                        #grid search for best alpha
-                        if h >= 12:
-                            # Force stronger regularization for long horizons to push the linear model toward a "Mean" forecast
-                            en_params = {'alpha': [50.0,100.0, 500.0],'l1_ratio': [ 0.5, 0.7, 0.9] } 
-                        else:
-                            en_params = {'alpha': [0.1, 1.0, 10.0, 50.0],'l1_ratio': [0.1, 0.3, 0.5]}
-
-                        grid_search = GridSearchCV(ElasticNet(), en_params, cv=tscv_rolling, 
-                            scoring='neg_mean_squared_error', n_jobs=-1)
-                                            
+                    # Check if current X_test has a valid Linear_Pred
+                    if pd.isna(X_test['Linear_Pred'].values[0]):
+                        # Fallback if the linear model didn't produce a prediction for today
+                        X_test['Linear_Pred'] = 0 
                     
-                        #fit grid on recent data to find best alpha for this specific point in time
-                        grid_search.fit(X_train_recent, Y_train_recent)
-                        best_ridge =grid_search.best_estimator_                        
-                    else:
-                        #fallback if too little data for CV: just take default alpha and fit on all data
-                        best_ridge= Ridge(alpha=1.0).fit(X_train_recent, Y_train_recent)
-                    meta_kf =TimeSeriesSplit(n_splits=5)
-                    try:
-                        linear_feat_train = cross_val_predict(best_ridge, X_train_recent, Y_train_recent, cv=meta_kf)
-                    except:
-                        # Fallback if too small
-                        linear_feat_train = best_ridge.predict(X_train_recent)
-
-                    # Create a Series for the feature
-                    linear_feature_series = pd.Series(linear_feat_train, index=X_train_recent.index)
-                    
-                    # Align: We only train the QRF on the data where we have this linear feature
-                    # (effectively reducing QRF training size to window_size, which is usually good for regime shifts)
-                    X_train_final = X_train_recent.copy()
-                    Y_train_final = Y_train_recent.copy()
-                    
-                    # Add the Linear Prediction as a new column "Linear_Pred"
-                    X_train_final['Linear_Pred'] = linear_feature_series
-
-                    # C. Generate Prediction for Test Set
-                    test_linear_pred = best_ridge.predict(X_test)
-                    X_test_final = X_test.copy()
-                    X_test_final['Linear_Pred'] = test_linear_pred
-                    
-                    # No residual modification!
-                    Y_train_effective = Y_train_final
-                    
-                    # For SHAP, we now have an extra feature "Linear_Pred"
-                    # We don't need to add `test_linear_preds` manually at the end
-                    linear_add = 0 
-                    
-                else: #normal qrf forecasting
-                    X_train_final = X_train
-                    X_test_final = X_test
-                    Y_train_effective= Y_train
-                    linear_add = 0
-                    test_linear_preds=np.zeros(len(X_test))  #no linear effect to add later
-
-
+                    # Impute training NaNs
+                    X_train['Linear_Pred'] = X_train['Linear_Pred'].fillna(0)
                 #use final params determined by which model use
                 model_args=final_params.copy()
                 #ensure reproducibility
                 model_args['random_state']=42
                 #train model
                 model= RandomForestQuantileRegressor(**model_args)
-                model.fit(X_train_final, Y_train_effective)
+                model.fit(X_train, Y_train)
                 #predict key quantiles for evaluation and plotting
                 plot_quantiles=[0.05, 0.16, 0.50, 0.84, 0.95]    
-                preds_plot=model.predict(X_test_final, quantiles=list(plot_quantiles))    #pre safe the predictions
+                preds_plot=model.predict(X_test, quantiles=list(plot_quantiles))    #pre safe the predictions
                 
                 #predict dense grid for CRPS and fan charts
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
-                preds_dense = model.predict(X_test_final, quantiles=list(eval_quantiles))
+                preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
                 #add linear part if residual forecasting
-                preds_plot+= (linear_add)
-                preds_dense+= (linear_add)
+                preds_plot+= 0
+                preds_dense+= 0
                 #calculate shapley values for the qrf tree part
-                shap_tree= shap_values(model, X_test_final, X_train=X_train_final,model_type='tree')
+                shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
                 #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
                 shap_combined= shap_tree.copy()
                 #combine shap values if residual forecasting

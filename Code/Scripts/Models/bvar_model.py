@@ -14,7 +14,7 @@ sys.path.insert(0, str(scripts_root))
 from Scripts.Utils.bvar_utils import BVAR
 from Scripts.Utils.metrics import calculate_crps, calculate_crps_quantile, calculate_rmse, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
-
+from Scripts.Utils.qrf_utils import get_pca, make_factor_features_time_safe
 
 def load_config(config_path):
     """
@@ -56,7 +56,9 @@ def run_experiment(config):
     lags=model_conf.get('lags',12)
     prior_type=model_conf['prior_type']
     implementation_type= model_conf.get('implementation_type','dummies')
-    prior_params=model_conf['params']
+    initial_prior_params = model_conf.get('params', {})
+    #get whether will use pca factors or not
+    use_pca_factors = bool(config.get("model", {}).get("use_pca_factors", False))
     
     #iterate to get right target col
     for h in horizons:
@@ -76,23 +78,74 @@ def run_experiment(config):
         #initialize for recursive predictions
         current_idx= start_idx
         #initialize dictionary where keys are target names and values are empty lists
-        results_storage={t: [] for t in target_names}
-
+        results_storage={target: [] for target in target_names}
+        #initialize var to store tuned params
+        tuned_params=None 
+        #counter when to re-tune (every 3 years)
+        months_since_last_tune=0
+        tune_frequency = 36
         #recursive forecasting loop (do with direct forecasting)
         while current_idx< total_rows:
             #get date
             forecast_date= df_system.index[current_idx]
             target_date=forecast_date+pd.DateOffset(months=h)
             #prepare training data up to current idx 
-            df_train = df_system.iloc[training_offset : (current_idx - h) + 1].dropna(subset=available_targets)
+            df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=available_targets)
+            X_test = df_system.iloc[current_idx - lags : current_idx + 1]
             #initialize for standardization
             #scaler=StandardScaler()
             #fit scaler on training data predictors
             #df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
+            if use_pca_factors:
+                # 1. Store the targets separately before they get lost
+                targets_to_keep = df_train[available_targets].copy()
                 
+                # 2. Decide PCA block vs kept columns
+                pca_cols, keep_cols = get_pca(df_columns=df_system.columns, 
+                                             target_cols_to_drop=current_target_cols, 
+                                             target_name=target_names[1], 
+                                             config=config)
+                
+                # 3. Fit PCA (This returns only features + factors)
+                df_train, X_test, pca_info = make_factor_features_time_safe(
+                    X_train=df_train, X_test=X_test, 
+                    pca_cols=pca_cols, keep_cols=keep_cols,
+                    config=config, forecast_date=forecast_date, 
+                    target_name=target_names[1], h=h, top_k=5
+                )
+
+                # 4. RE-ATTACH TARGETS HERE
+                df_train = pd.concat([targets_to_keep, df_train], axis=1)
+            #determine if need to retune
+            should_tune=False
+            #if first run-> tune:
+            if tuned_params is None:
+                should_tune =True
+            #else every 3 years
+            elif months_since_last_tune>= tune_frequency:
+                should_tune=True 
+                months_since_last_tune = 0 #reset counter
+            #initialize params to tune -> not tune yet can use default
+            init_params= tuned_params if tuned_params else initial_prior_params
+
             #initialize and fit BVAR model
-            model= BVAR(lags=lags, prior_type=prior_type, prior_params=prior_params, implementation_type=implementation_type)
-            model.fit(df_train, horizon=h) #on scaled data
+            model= BVAR(lags=lags, prior_type=prior_type, prior_params=init_params, implementation_type=implementation_type)
+            #retune every 3 years
+            if should_tune:
+                model.fit(df_train, horizon=h) #without fixed lambda
+                #save best params
+                tuned_params = model.params.copy()
+                months_since_last_tune =0   #reset counter
+            #else use lambda from last tuning
+            else:
+                if 'independent_niw' in prior_type:
+                    # Independent NIW uses a1/a2/a3 usually, not 'lambda'
+                    model.fit(df_train, horizon=h) 
+                else:
+                    # Minnesota/Natural NIW
+                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
+                
+                months_since_last_tune += 1
             #skip if not a training and forecasting month 
             if forecast_date.month not in snb_months:
                 current_idx += 1
@@ -200,7 +253,7 @@ def run_experiment(config):
             results_df = pd.DataFrame(results_storage[var_name])
             results_df.set_index('Date', inplace=True)
                 
-            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{var_name}_{h}m.csv"
+            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{h}m.csv"
             results_df.to_csv(save_name)
 
 if __name__ =="__main__":

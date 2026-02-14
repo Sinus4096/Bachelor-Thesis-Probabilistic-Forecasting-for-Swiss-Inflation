@@ -1,0 +1,33 @@
+#the default with predicting Ridge to try to overcome the high PIT values during 
+experiment_name: "QRF_Default_Res_PCA"
+model_type: "qrf"
+
+#define the data used in the experiment
+data:
+  targets: ["Headline", "Core"]     #define the target variables to devide in X and Y
+  horizons: [3, 6, 9, 12]   #comparison on predefined list of forecast horizons    
+  #recursive updating settings (out-of-sample predictions like in ECB paper):
+  evaluation_scheme: "expanding_window"
+  eval_start_date: "2012-07-01"     #->when start making predictions, need enough training information-> approx 160 datapoints, ECB used 10 years
+  retrain_step_months: 3      #update forecast every quarter, see reasoning in thesis
+
+#specify default model           
+model:
+  use_residual_forecasting: true   #run the model on residuals using ridge
+  use_pca_factors: true   #use pca factor to use less features
+  pca:
+    max_factors: 5
+    r_method: "kaiser"         # "kaiser" | "fixed"
+    r_fixed: 4                 # used if r_method == "fixed"
+    keep_ar: true              # keep headline_1m / core_1m outside PCA
+    keep_seasonals: true       # keep sin/cos outside PCA
+  density_method: "skew-t"
+
+  
+  
+  params:
+    n_estimators: 500    #nr. of decision trees used: ECB used 500
+    min_samples_leaf: 10    #meinshausen and ECB proposed 10 by default
+    max_features: 0.33    #how many features tree allowed to look at; ECB used 0.33
+    n_jobs: -1    #use all CPU power
+    random_state: 42    #for reproducibility: seed

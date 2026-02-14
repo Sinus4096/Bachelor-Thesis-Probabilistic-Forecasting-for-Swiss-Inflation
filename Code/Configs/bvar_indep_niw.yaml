@@ -11,6 +11,13 @@ data:
 model:
   prior_type: "independent_niw" #use independent NIW prior
   #def hierarchical hyperparameters (based on Korobilis 2020)
+  use_pca_factors: true   #use pca factor to use less features
+  pca:
+    max_factors: 5
+    r_method: "kaiser"      #kaiser | fixed
+    r_fixed: 4    # used if r_method == "fixed"
+    keep_ar: true      # keep headline_1m / core_1m outside PCA
+    keep_seasonals: true    # keep sin/cos outside PCA
   params:
     sampling_iters: 12000 #number of Gibbs sampling iterations
     #Hyperparameters for lambda grid search

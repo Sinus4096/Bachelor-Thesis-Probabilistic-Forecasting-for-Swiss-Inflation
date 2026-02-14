@@ -1,0 +1,25 @@
+,Variable,ADF Statistic,p-value,Lags Used (AIC for decision),Observations,Stationary? (at 5%),1% Critical,5% Critical
+0,PPI,-7.4731,0.0,0,157,Yes,-3.4727,-2.8801
+1,real_turnover,-6.1356,0.0,2,155,Yes,-3.4733,-2.8804
+2,retail_turnover,-16.1073,0.0,1,156,Yes,-3.473,-2.8803
+3,Manufacturing_EU,-5.2661,0.0,6,151,Yes,-3.4744,-2.8809
+4,Vol_loans,-13.4777,0.0,0,157,Yes,-3.4727,-2.8801
+5,Exchange_Rate_CHF,-12.0834,0.0,0,157,Yes,-3.4727,-2.8801
+6,gdp_index_ch,-3.9358,0.0018,0,155,Yes,-3.4733,-2.8804
+7,gdp_index_eu,-3.2986,0.0149,0,155,Yes,-3.4733,-2.8804
+8,target_headline_3m,-3.2339,0.0181,10,145,Yes,-3.4763,-2.8817
+9,target_core_3m,-2.1819,0.2129,9,146,No,-3.476,-2.8815
+10,target_headline_6m,-3.2435,0.0176,7,145,Yes,-3.4763,-2.8817
+11,target_core_6m,-2.2366,0.1932,6,146,No,-3.476,-2.8815
+12,target_headline_9m,-2.7937,0.0592,12,137,No,-3.479,-2.8829
+13,target_core_9m,-1.8945,0.3346,13,136,No,-3.4794,-2.883
+14,target_headline_12m,-1.4295,0.568,13,133,No,-3.4805,-2.8835
+15,target_core_12m,-1.1286,0.7035,12,134,No,-3.4801,-2.8834
+16,target_headline_3m_diff,-4.3986,0.0003,14,129,Yes,-3.4821,-2.8842
+17,target_core_3m_diff,-3.4022,0.0109,3,140,Yes,-3.4779,-2.8824
+18,target_headline_6m_diff,-3.2071,0.0196,12,128,Yes,-3.4825,-2.8844
+19,target_core_6m_diff,-2.0673,0.2579,12,128,No,-3.4825,-2.8844
+20,target_headline_9m_diff,-3.8037,0.0029,14,123,Yes,-3.4847,-2.8853
+21,target_core_9m_diff,-2.3017,0.1714,13,124,No,-3.4842,-2.8851
+22,target_headline_12m_diff,-2.8871,0.0469,12,122,Yes,-3.4851,-2.8855
+23,target_core_12m_diff,-1.8192,0.3709,12,122,No,-3.4851,-2.8855

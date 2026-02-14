@@ -132,61 +132,11 @@ print(rows_with_nan)
 
 
 #------------------------------------
-#look at stats-> need to standardize for qrf?
+#look at stats-> need to standardize for elastic net in qrf?
 #-------------------------
 print(df_stationary.describe().T)
 
-#----------------------
-#standardize features
-# --------------------------------
-#for feature importance of qrf and for bvar generallyneed to standardize the features but not the targets because want to keep them
-#in original units for evaluation later on
-
-#need to standardize based on data we have available: meaning based on training data to prevent look-ahead bias
-#define split date
-test_start_date= '2013-07-01'
-#define exclusion criteria: dont want to standardize targets 
-#vars_to_scale =[col for col in df_stationary.columns if 'target' not in col]
-vars_to_scale_bvar=[col for col in df_bvar.columns if 'target' not in col]  
-
-#def scaler
-#scaler=StandardScaler()
-#fit scale on training data only
-#scaler.fit(df_stationary.loc[:test_start_date].iloc[:-1][vars_to_scale]) 
-#transform the data
-#df_stationary[vars_to_scale]= scaler.transform(df_stationary[vars_to_scale])
-#new scaler for BVAR dataframe 
-#scaler_bvar= StandardScaler()
-#fit only on BVAR training data 
-#scaler_bvar.fit(df_bvar.loc[:test_start_date].iloc[:-1][vars_to_scale_bvar])
-#df_bvar[vars_to_scale_bvar]= scaler_bvar.transform(df_bvar[vars_to_scale_bvar])
-
-#recheck descriptive stats
-print(df_stationary.describe().T)
-#decision: to have best fits: will do scaling recursively in the training loop of the qrf model
-
-
-
-
-
-#----------------------------------------
-#for 2. configuration of the stationary data: direct 12-month YoY growth rate prediction (no 12/h scaling)
-#-----------------------------------------------------------
-df_stationary2=df_stationary.copy()
-#drop previous targets
-target_cols_to_drop= [col for col in df_stationary2.columns if 'target_' in col]
-df_stationary2.drop(columns=target_cols_to_drop, inplace=True)
-
-#12 month yoy growth rates in %
-yoy_headline_raw=(np.log(df['Headline_CPI']).diff(12))*100
-yoy_core_raw= (np.log(df['Core_CPI']).diff(12))* 100
-
-#shift according to horizons
-for h in horizons:
-    df_stationary2[f'target_headline_{h}m'] = yoy_headline_raw.shift(-h)
-    df_stationary2[f'target_core_{h}m'] = yoy_core_raw.shift(-h)
-
-
+#will standardize in the qrf directly (iteratively)-> scale on training data so no data leakage
 
 
 
@@ -226,7 +176,5 @@ output_file1=output_path/'data_stationary.csv'
 df_stationary.to_csv(output_file1, index=True)
 output_file2=output_path/'data_yoy.csv'
 df_yoy.to_csv(output_file2, index=True)
-output_file3= output_path/'data_stationary_direct.csv'
-df_stationary2.to_csv(output_file3, index=True)
 output_file4= output_path/'data_stationary_bvar.csv'
 df_bvar.to_csv(output_file4, index=True)
