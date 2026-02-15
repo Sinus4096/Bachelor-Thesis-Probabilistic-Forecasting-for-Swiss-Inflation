@@ -1,13 +1,16 @@
 import numpy as np
-from scipy import stats, optimize, special
+from scipy import stats
 import pandas as pd
-
-
 import numpy as np
 
+
+
+
+#crps for bvar tuning
+#----------------------------------
 def crps_from_samples(y, samples):
     """
-    Proper CRPS for an empirical predictive distribution (samples).
+    Proper CRPS for an empirical predictive distribution
     """
     s = np.asarray(samples).ravel()
     if s.size == 0 or np.isnan(y):
@@ -16,21 +19,8 @@ def crps_from_samples(y, samples):
     term2 = 0.5 * np.mean(np.abs(s[:, None] - s[None, :]))
     return float(term1 - term2)
 
-
-def rolling_crps_score(
-    data,
-    target_col=None,
-    target_idx=0,
-    horizon=12,
-    prior_type="natural_niw",
-    prior_params=None,
-    fixed_lambda=0.02,
-    start_eval=60,
-    step=1,
-    n_draws=600,
-    burn_in=150,
-    y_is_preshifted=False,
-):
+def rolling_crps_score(data, target_col=None, target_idx=0, horizon=12, prior_type="natural_niw", prior_params=None, fixed_lambda=0.02, start_eval=60,
+    step=1, n_draws=600, burn_in=150, y_is_preshifted=False):
     # auto-detect target column if not provided
     if target_col is None:
         target_cols = [c for c in data.columns if "target_" in c]
@@ -57,6 +47,7 @@ def rolling_crps_score(
 
 
 
+
 #see thesis for formulas
 class BVAR:
     """
@@ -74,8 +65,9 @@ class BVAR:
         self.n_vars= None      #to store number of variables
         self.n_features= None  #to store number of features after lags (K= N*p +1)
         self.feature_var_indices =None #to track which variable owns a feature column
-        # Initialize Cache for tuning if it doesn't exist
-        self._mn_tuned_cache = {}
+        #initialize cache for tuning 
+        self._mn_tuned_cache ={}
+        self._ind_tuned_cache ={}
 
 
     def create_lags(self, data, horizon =12):
@@ -123,8 +115,8 @@ class BVAR:
         block_size=self.n_vars+self.n_exog
         self.feature_var_indices= []        
         for k in self.kept_indices:
-            # k is the index in the original huge stack
-            # mod block_size gives the variable index
+            #k is the index in the original huge stack
+            #mod block_size gives the variable index
             original_var_idx = k % block_size
             self.feature_var_indices.append(original_var_idx)
         self.feature_var_indices = np.array(self.feature_var_indices)
@@ -140,203 +132,7 @@ class BVAR:
         self.n_features =X.shape[1]  #number of features after adding intercept and deduplication
         return X, Y_aligned
 
-    def get_minnesota_precision(self, lam, theta, alpha, a3, sigmas_x):
-        """
-        Constructs the Prior Precision Matrix (Diagonal) analytically.
-        Precision = Inverse of Variance.
-        """
-        K = self.n_features
-        # Initialize Prior Precision Diagonal (High precision = Tight prior near 0)
-        # Variance ~ lambda^2. Precision ~ 1/lambda^2.
-        
-        precision_diag = np.zeros(K)
-        
-        # Intercept Precision (Index 0)
-        # Variance = a3. Precision = 1/a3.
-        precision_diag[0] = 1.0 / a3
-        
-        block_size = self.n_vars + self.n_exog
-        
-        for j, f_type in enumerate(self.feature_type_map):
-            col_idx = j + 1
-            orig_j = int(self.kept_indices[j])
-            
-            # Use sigma of the predictor
-            s_jj = sigmas_x[j]
-            
-            # Lag distance
-            lag_pos = orig_j // block_size
-            lag = self.lag_indices[lag_pos]
-            
-            # Decay factor (k^alpha)
-            # Higher alpha -> Distant lags have less variance -> Higher Precision
-            lag_decay = max(1, lag) ** alpha
-            if f_type == 0: # Target lags
-                lag_decay_target = (self.h + max(1, lag)) ** alpha
-                # Variance = (lambda / lag^alpha * sigma)^2 ... simplified
-                # Let's use standard: Var = (lambda^2) / (s_jj^2 * k^2alpha)
-                # Precision = (s_jj^2 * k^2alpha) / lambda^2
-                precision_diag[col_idx] = (s_jj**2 * lag_decay_target) / (lam**2)
-            else:
-                # Exogenous: Tighter by theta
-                # Variance = (lambda * theta)^2 / ...
-                # Precision = ... / (lambda*theta)^2
-                precision_diag[col_idx] = (s_jj**2 * lag_decay) / ((lam * theta)**2)
-                
-        return np.diag(precision_diag)
-
-
-    def independent_priors(self, N, K, a1, a2, a3, sigmas):
-        """
-        Constructs the vectorized priors alpha_0 (NK x 1) and V_alpha_0 (NK x NK)
-        """
-        # 1. Prior Mean alpha_0 (vec(Phi_0))
-        # Usually 0, or 1 for the first lag of own variable (Random Walk)
-        Phi_0 = np.zeros((K, N))
-        # Example: Assume White Noise (prior mean 0). 
-        # For Random Walk: for i in range(N): Phi_0[1+i, i] = 1.0
-        alpha_0 = Phi_0.flatten(order='F')
-
-        # 2. Prior Covariance V_alpha_0 (NK x NK)
-        # We construct this as a diagonal matrix to allow independent shrinkage
-        V_diag = np.zeros(K * N)
-        
-        for n in range(N): # For each equation
-            for k in range(K): # For each feature
-                idx = n * K + k
-                if k == 0: # Intercept
-                    V_diag[idx] = (sigmas[n]**2) *a3
-                else:
-                    # Determine which variable 'j' and which lag 'p' this feature belongs to
-                    # This logic depends on how create_lags organized X.
-                    # Simplified Minnesota-style logic:
-                    V_diag[idx] = (a1**2) # Simplified for custom lag structure
-        
-        V_alpha_0 = np.diag(V_diag)
-        V_alpha_0_inv = np.diag(1.0 / V_diag)
-        
-        return alpha_0, V_alpha_0_inv
-
-    def _compute_posterior_minnesota(self, X, Y, best_lam, best_theta, best_decay, a3, sigmas, sigmas_all):
-        """
-        HELPER FUNCTION: Handles both Analytical and Dummies logic.
-        Returns: Phi_post, S_post, Cholesky_Precision (for sampling)
-        """
-        N = self.n_vars
-        K = self.n_features
-        T = X.shape[0]
-        
-        # Define Prior S_0 (Scale Matrix) - Common to both
-        S_0 = np.diag(sigmas**2)
-
-        if self.implementation_type == 'analytical':
-            # ---------------- ANALYTICAL ----------------
-            # 1. Get Moments
-            self.params['theta'] = best_theta
-            self.params['alpha_decay'] = best_decay
-            Phi_0, Psi_0 = self.natural_moments(N, best_lam, a3, sigmas, sigmas_all)
-            
-            # 2. Posterior Precision
-            Psi_0_inv = np.linalg.inv(Psi_0) # This is Prior Variance
-            # Note: Your natural_moments returns Psi_0 as VARIANCE or PRECISION? 
-            # Looking at natural_moments: it calculates (lam**2)/sigma... that is Variance.
-            # So Psi_0 in natural_moments is actually V_prior.
-            # Precision = inv(V_prior).
-            
-            # Let's verify natural_moments logic: 
-            # psi_diag[col] = (lam**2)... This is Variance.
-            # So Psi_0 is Prior Variance Matrix (V_0).
-            V_0 = Psi_0 
-            V_0_inv = np.diag(1.0 / np.diag(V_0)) # Prior Precision
-            
-            XX = X.T @ X
-            V_post_inv = V_0_inv + XX # Posterior Precision
-            
-            # Stability Jitter
-            V_post_inv += np.eye(K) * 1e-6
-            
-            # 3. Posterior Mean
-            # Phi_post = V_post @ (V_0_inv @ Phi_0 + X'Y)
-            # Phi_0 is zero, so:
-            Phi_post = np.linalg.solve(V_post_inv, X.T @ Y)
-            
-            # 4. Posterior Scale S_post
-            # S_post = S_0 + Y'Y + Phi_0' V_0_inv Phi_0 - Phi_post' V_post_inv Phi_post
-            term_data = Y.T @ Y
-            term_post = Phi_post.T @ V_post_inv @ Phi_post
-            S_post = S_0 + term_data - term_post
-            
-            return Phi_post, S_post, V_post_inv
-
-        else:
-            # ---------------- DUMMIES ----------------
-            # 1. Get Dummies
-            X_dum, Y_dum = self.minnesota_dummies(best_lam, best_theta, a3, best_decay, sigmas, sigmas_all)
-            
-            # 2. Augment Data
-            X_star = np.vstack([X_dum, X])
-            Y_star = np.vstack([Y_dum, Y])
-            
-            # 3. Posterior via OLS on augmented data
-            XX_star = X_star.T @ X_star + np.eye(K) * 1e-6
-            XY_star = X_star.T @ Y_star
-            
-            Phi_post = np.linalg.solve(XX_star, XY_star)
-            
-            # 4. Posterior Scale
-            # S_post = S_0 + SSE_star
-            # Note: We must ensure S_0 isn't double counted.
-            # In purely dummy approaches, S_0 is often encoded in dummies. 
-            # Here we add it explicitly to match NIW.
-            E_star = Y_star - X_star @ Phi_post
-            S_post = S_0 + E_star.T @ E_star
-            
-            return Phi_post, S_post, XX_star
-
-
-
-
-    def log_ml_natural(self, log_lambda, X, Y, a3, sigmas, sigmas_x):
-        """compute log marginal likelihood for natural niw prior"""
-        #define parameters
-        lam= np.exp(log_lambda)
-        T, N=Y.shape  #get dimensions
-        K = self.n_features
-        #get prior based on lambda
-        Phi_0, Psi_0= self.natural_moments(N, lam, a3, sigmas, sigmas_x)
-        Psi_0_inv= np.diag(1.0/np.diag(Psi_0))  #work with precision (inverse) for stability
-        #posterior parameters
-        XX= X.T @X
-        Psi_post_inv= Psi_0_inv +XX  #posterior precision
-        #log determinants for psi
-        L_post_inv= np.linalg.cholesky(Psi_post_inv)     
-        log_det_Psi_post_inv= -2.0*np.sum(np.log(np.diag(L_post_inv)))
-        log_det_Psi_0= np.sum(np.log(np.diag(Psi_0)))
-        log_det_Psi_post = -log_det_Psi_post_inv #since Psi_post is inverse of Psi_post_inv
-        #posterior mean
-        rhs= Psi_0_inv @Phi_0+X.T@ Y  #right-hand side of posterior mean formula
-        Phi_post= np.linalg.solve(Psi_post_inv, rhs)    
-        #prior scale matrix
-        S_0= np.diag(sigmas**2)
-        #get posterior scale matrix via helpers
-        term_data= Y.T @Y  
-        term_prior= Phi_0.T @ Psi_0_inv @Phi_0
-        term_post= Phi_post.T @ Psi_post_inv @Phi_post
-        S_post= S_0 +term_data +term_prior -term_post
-        #get prior degrees of freedom
-        nu_0= N+2
-        nu_post= nu_0+ T    #posterior degrees of freedom
-        #log determinant of S_0
-        log_det_S_0= np.sum(np.log(np.diag(S_0)))
-        #log determinant of S_post
-        sign, log_det_S_post= np.linalg.slogdet(S_post)
-        #compute log marginal likelihood
-        term_cov=(N/2.0)*(log_det_Psi_post - log_det_Psi_0)  #covariance terms from prior and posterior
-        term_scale= (nu_0/2.0)*log_det_S_0-(nu_post/2.0)*log_det_S_post  #scale terms from prior and posterior  
-        const_gamma=special.multigammaln(nu_post/2.0, N)- special.multigammaln(nu_0/2.0, N)  #gamma function terms
-        log_ml= term_cov +term_scale + const_gamma- (T*N/2.0)*np.log(np.pi)
-        return log_ml
-    
+ 
     def natural_moments(self, N, lam, a3, sigmas_y, sigmas_x):
         """ constructs prior moments for natural conjugate normal-inverse wishart prior"""
         #get dimensions
@@ -424,21 +220,7 @@ class BVAR:
             res = np.diff(feature_cols_raw[:, idx])
             sigmas_x_all.append(np.std(res) if len(res) > 0 else 0.1)
         sigmas_all = np.array(sigmas_x_all)
-        #as create lags only for X, need seperate sigma calculation for the raw features
-        #sigmas_x_raw=[]
-        #loop through each feature column in the raw X data to calculate its sigma
-        #for idx in range(X_raw_data.shape[1]):
-         #   res=np.diff(X_raw_data[:, idx])  #use diff to get changes
-          #  sigmas_x_raw.append(np.std(res) if len(res) > 0 else 0.1)   #avoid zero std if not enough data
-        #to array
-        #sigmas_x_raw = np.array(sigmas_x_raw)
-        #lag order to align with create lag function
-        #sigmas_one_block= np.concatenate([sigmas, sigmas_x_raw])
-        #L= len(self.lag_indices)  #number of lag blocks
-        #sigmas_tiled=np.tile(sigmas_one_block, L)        #tile the raw sigmas according to the lag structure
         
-        #apply the same deduplication mask used in create_lags
-        #sigmas_all = sigmas_tiled[self.kept_indices]
         #Minnesota config
         #-----------------
         if 'minnesota' in self.prior_type:
@@ -599,14 +381,77 @@ class BVAR:
         #independent normal-inverse wishart prior
         #----------------------------------
         elif 'independent_niw' in self.prior_type:
-            #hyperparameters
-            a1=self.params.get('lambda', 0.01)   # own lag tightness
-            a2= self.params.get('theta', 0.01)    #cross-variable tightness
-            a3= self.params.get('alpha', 100.0) #intercept tightness
-            decay = self.params.get('alpha_decay', 2.0)
-            n_iter =self.params.get('sampling', {}).get('n_draws', 2000)    #number of posterior draws
-            burn_in= self.params.get('sampling', {}).get('burn_in', 500)  #burn-in period-> discard initial samples for convergence
-                        
+            #def hyperpar
+            a3= float(self.params.get('alpha', 100.0))    #intecept variance scale
+            a2_default = float(self.params.get('theta', 0.2)) 
+            #nr of iters and burn in 
+            n_iter=int(self.params.get('sampling', {}).get('n_draws', n_draws))
+            burn_in_local= int(self.params.get('sampling', {}).get('burn_in', burn_in))
+
+            #dont want rolling window to aboid recursion in rolling crps      
+            if fixed_lambda is not None:
+                a1= float(fixed_lambda)
+                a2= a2_default          #-> can have a2!= a1 in general
+                decay= float(self.params.get("alpha_decay", 2.0))
+            else:  #grid search
+                cache_key=("independent_niw", horizon, int(self.n_features), int(self.n_vars), int(self.n_exog))
+                if cache_key in self._ind_tuned_cache:
+                    a1, a2, decay = self._ind_tuned_cache[cache_key]
+                else:
+                    #get K and exog vars to adjust grid depending on features
+                    K=self.n_features
+                    exog=self.n_exog
+                    #smaller K/ few factors-> allow wider lambda
+                    if exog<= 6 and K<= 25:
+                        lambda_grid =[0.001, 0.003, 0.01, 0.03, 0.08, 0.15]
+                        theta_grid= [0.05, 0.1, 0.2, 0.4, 0.8, 1.2]
+                        decay_grid = [1.0, 2.0, 3.0]
+                    else:
+                        lambda_grid=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]
+                        theta_grid = [0.01, 0.03, 0.1, 0.3, 0.7]
+                        decay_grid= [2.0, 4.0, 6.0]
+                    start_eval = max(horizon + 24, int(0.75 * len(data)))
+                    step_tune = 4
+                    n_draws_tune = 150
+                    burn_in_tune = 50
+
+                    target_cols = [c for c in data.columns if "target_" in c]
+                    target_col = target_cols[0]
+
+                    best_score = np.inf
+                    best_params_tuple = (lambda_grid[0], theta_grid[0], decay_grid[0])
+
+                    for a1 in lambda_grid:
+                        for th in theta_grid:
+                            for dec in decay_grid:
+                                p_params = {
+                                    "theta": float(th),
+                                    "alpha_decay": float(dec),
+                                    "alpha": float(a3),
+                                    # keep sampling small for tuning (optional, but keeps your code consistent)
+                                    "sampling": {"n_draws": n_draws_tune, "burn_in": burn_in_tune},
+                                }
+
+                                score = rolling_crps_score(
+                                    data=data,
+                                    target_col=target_col,
+                                    target_idx=0,
+                                    horizon=horizon,
+                                    prior_type="independent_niw",
+                                    prior_params=p_params,
+                                    fixed_lambda=float(a1),        # IMPORTANT: now honored by this branch
+                                    start_eval=start_eval,
+                                    step=step_tune,
+                                    n_draws=n_draws_tune,
+                                    burn_in=burn_in_tune,
+                                )
+                                if score < best_score:
+                                    best_score = score
+                                    best_params_tuple = (float(a1), float(th), float(dec))
+
+                    a1, a2, decay = best_params_tuple
+                    self._ind_tuned_cache[cache_key] = (a1, a2, decay)
+                    self.params.update({"lambda": a1, "theta": a2, "alpha_decay": decay})
             #prior moments
             alpha_0=np.zeros(N*K)  #all zeros for WN
             V_alpha_0_diag= np.zeros(N*K) #to store prior precision diag
@@ -659,8 +504,10 @@ class BVAR:
                         else:
                             # PCA FACTORS (Exogenous block)
                             V_alpha_0_diag[idx] = ((a1 * a2 * sigma_i) / (sigma_j * lag_func))**2
-            #define prior precision as inverse of variance
-            V_alpha_0_inv =np.diag(1.0/V_alpha_0_diag)
+            #define prior precision as inverse of variance and make sure never hits 0
+            V_alpha_0_diag = np.maximum(V_alpha_0_diag, 1e-12)
+            V_alpha_0_inv = np.diag(1.0 / V_alpha_0_diag)
+
             
             #prior scale matrix
             S_0=np.diag(sigmas**2)
@@ -671,8 +518,9 @@ class BVAR:
             Sigma_current = np.atleast_2d(Sigma_current)  # ensure (N,N), also for N=1
   #start value for sigma
             #initialize storage for draws: vec bzw matrix of zeros
-            self.phi_draws = np.zeros((n_iter - burn_in, K, N))
-            self.sigma_draws = np.zeros((n_iter - burn_in, N, N))
+            keep = max(1, n_iter - burn_in_local)
+            self.phi_draws = np.zeros((keep, K, N))
+            self.sigma_draws = np.zeros((keep, N, N))
             #X'X for precision update
             XX= X.T @X
 
@@ -713,9 +561,11 @@ class BVAR:
 
 
                 #store draws after burn-in
-                if it >= burn_in:
-                    self.phi_draws[it-burn_in]= Phi_current
-                    self.sigma_draws[it-burn_in]= Sigma_current
+                if it >= burn_in_local:
+                    j = it - burn_in_local
+                    if j < keep:
+                        self.phi_draws[j] = Phi_current
+                        self.sigma_draws[j] = Sigma_current
             
 
         # Natural Conjugate Normal-Wishart Prior
@@ -723,6 +573,21 @@ class BVAR:
         elif 'natural_niw' in self.prior_type:
             #def default params  
             a3= self.params.get('alpha', 100.0)
+            #as create lags only for X, need seperate sigma calculation for the raw features
+            sigmas_x_raw=[]
+            #loop through each feature column in the raw X data to calculate its sigma
+            for idx in range(X_raw_data.shape[1]):
+               res=np.diff(X_raw_data[:, idx])  #use diff to get changes
+               sigmas_x_raw.append(np.std(res) if len(res) > 0 else 0.1)   #avoid zero std if not enough data
+            #to array
+            sigmas_x_raw = np.array(sigmas_x_raw)
+            #lag order to align with create lag function
+            sigmas_one_block= np.concatenate([sigmas, sigmas_x_raw])
+            L= len(self.lag_indices)  #number of lag blocks
+            sigmas_tiled=np.tile(sigmas_one_block, L)        #tile the raw sigmas according to the lag structure
+            
+            #apply the same deduplication mask used in create_lags
+            sigmas_all = sigmas_tiled[self.kept_indices]
             #if not tune, set default
             if fixed_lambda is not None:
                 best_lam= fixed_lambda

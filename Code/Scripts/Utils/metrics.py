@@ -4,7 +4,7 @@ from scipy.stats import nct
 from scipy.integrate import quad
 import shap
 import pandas as pd
-from sklearn.base import clone
+
 #evaluation of quantile predictions
 #-----------------------------
 def calculate_crps_quantile(y_true, y_preds_quantiles, quantiles):
@@ -69,89 +69,99 @@ def calculate_rmse(actual, predicted_median):
 
 
 
-#4.CRPS via quantile preds for empirical crps calculation: want to see how much smoothing the skew-t fit changed the result
-#-----------------------------
-def calculate_empirical_crps(y_true, y_preds, quantiles):
-    """
-    calculates CRPS approximation via pinball loss from quantile predictions"""
-    #ensure inputs are numpy arrays
-    y_preds=np.array(y_preds).flatten()
-    quantiles= np.array(quantiles)
-    
-    #pinball loss calculation as in calculate_crps_quantile funtion
-    diff=y_true -y_preds
-    loss= np.where(diff>= 0, diff*quantiles, -diff *(1-quantiles))
-    return 2*np.mean(loss)
-
-
-
-
-
-
+#shapley value
+#---------------------------------
 def shap_values(model_obj, X_input, X_train=None, model_type='linear', linear_coeffs=None, linear_const=0.0):
-    """ calculate Shapley values need to differentiate between linear and non linear models
-    -> linear models: Exact Calculation (Coefficients*Values) because it is faster and mathematically precise
+    """calculate Shapley values need to differentiate between linear and non linear models
+    ->linear models: Exact Calculation (Coefficients*Values) because it is faster and mathematically precise
      ->QRF: shap (=an approximation) """
     #initialize dict to store contributions
-    shap_contributions = {}
-
+    shap_contributions={} 
     #Tree-Based Models (QRF)
     #-------------------------------------------------------
-    if model_type == 'tree':    
-        # 1. Try the much faster TreeExplainer first
-        def extract_to_dict(vals, expected, feature_names):
-            if isinstance(vals, list): vals = vals[0]
-            if len(vals.shape) > 1: vals = vals[0]
-            if isinstance(expected, np.ndarray): expected = expected[0]
+    #check if model type is tree based
+    if model_type == 'tree':     
+        #define inner function to handle data conversion to dictionary
+        def extract_to_dict(vals, expected, feature_names): 
+            #extract first element if values are in a list
+            if isinstance(vals, list):vals=vals[0] 
+            #handle multi-dimensional arrays by taking the first row
+            if len(vals.shape) >1: vals =vals[0] 
+            #extract first element of expected value if array
+            if isinstance(expected, np.ndarray): expected = expected[0] 
             
-            for i, col in enumerate(feature_names):
-                shap_contributions[f'Shap_{col}'] = vals[i]
-            shap_contributions['Shap_Constant'] = expected
+            #loop through feature names and assign values to dictionary
+            for i, col in enumerate(feature_names): 
+                #map feature name to its corresponding shap value
+                shap_contributions[f'Shap_{col}'] =vals[i] 
+            #store the expected value as the shap constant
+            shap_contributions['Shap_Constant']=expected 
 
-        try:
-            # Attempt 1: Fast TreeExplainer
-            explainer = shap.TreeExplainer(model_obj)
-            shap_vals = explainer.shap_values(X_input, check_additivity=False)
-            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns)
+        #begin attempt to use fast explainer
+        try: 
+            #Attempt 1: Fast TreeExplainer
+            #initialize the tree explainer object
+            explainer=shap.TreeExplainer(model_obj) 
+            #calculate shap values without checking additivity for speed
+            shap_vals= explainer.shap_values(X_input, check_additivity=False) 
+            #call helper to format and store results
+            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns) 
             
-        except Exception:
-            # Attempt 2: Fallback to KernelExplainer (for quantile-forest)
-            if X_train is None:
-                raise ValueError("X_train is required for QRF/KernelExplainer fallback")
+        #handle cases where tree explainer fails
+        except Exception: 
+            #Attempt 2: Fallback to KernelExplainer (for quantile-forest)
+            #check if training data is provided for kernel estimation
+            if X_train is None: 
+                #raise error if background data is missing
+                raise ValueError("X_train is required for QRF/KernelExplainer fallback") 
 
-            # Capture feature names to fix warning
-            feature_names = X_train.columns.tolist()
+            #capture feature names to fix warning
+            feature_names=X_train.columns.tolist() 
 
-            # Wrapper to add column names back and predict median
-            def predict_wrapper(data):
-                if isinstance(data, np.ndarray):
-                    data = pd.DataFrame(data, columns=feature_names)
-                return model_obj.predict(data, quantiles=[0.5]).flatten()
+            #wrapper to add column names back and predict median
+            def predict_wrapper(data): 
+                #check if data is numpy array to convert back to dataframe
+                if isinstance(data, np.ndarray): 
+                    #re-apply feature names for model consistency
+                    data = pd.DataFrame(data, columns=feature_names) 
+                #predict the 0.5 quantile and flatten output
+                return model_obj.predict(data, quantiles=[0.5]).flatten() 
 
-            # Suppress warnings during kmeans and shap calculation
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                background = shap.kmeans(X_train, 10) 
-                explainer = shap.KernelExplainer(predict_wrapper, background)
-                shap_vals = explainer.shap_values(X_input, silent=True)
+            #suppress warnings during kmeans and shap calculation
+            with warnings.catch_warnings(): 
+                #ignore simple warnings for cleaner output
+                warnings.simplefilter("ignore") 
+                #summarize background data using 10 centroids
+                background=shap.kmeans(X_train, 10)  
+                #initialize the kernel explainer with wrapper
+                explainer =shap.KernelExplainer(predict_wrapper, background) 
+                #calculate shap values in silent mode
+                shap_vals =explainer.shap_values(X_input, silent=True) 
             
-            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns)
+            #call helper to format and store kernel results
+            extract_to_dict(shap_vals, explainer.expected_value, X_input.columns) 
 
     #Linear Models (AR-GARCH, BVAR)
     #---------------------------------------------------
-    elif model_type =='linear':
+    #check if model type is linear
+    elif model_type =='linear': 
         #loop through coefficients and multiply by input values
-        for feature_name, coef_val in linear_coeffs.items():
+        for feature_name, coef_val in linear_coeffs.items(): 
             #X_input is a Series with matching index (e.g., BVAR with named lags)
-            if feature_name in X_input.index:
-                val =X_input[feature_name]    #find mathcing value in input data
-                shap_contributions[f'Shap_{feature_name}'] =coef_val*val  #calc shap value as Coefficients*Values
+            if feature_name in X_input.index: 
+                #find matching value in input data
+                val =X_input[feature_name]     
+                #calc shap value as Coefficients*Values
+                shap_contributions[f'Shap_{feature_name}'] =coef_val*val   
             #AR-GARCH style (arch package uses "y[1]", "y[2]")
-            elif 'y[' in feature_name:
-                lag_idx=int(feature_name.split('[')[1].split(']')[0])
-                # X_input is sorted chronologically, y[1] is the last item
-                val=X_input.iloc[-lag_idx] 
-                shap_contributions[f'Shap_Lag_{lag_idx}']= coef_val*val  #calc shap value as Coefficients*Values
-        #add constant term contribution           
-        shap_contributions['Shap_Constant'] =linear_const
+            elif 'y[' in feature_name: 
+                #parse the lag index from the string name
+                lag_idx=int(feature_name.split('[')[1].split(']')[0]) 
+                #X_input is sorted chronologically, y[1] is the last item
+                val=X_input.iloc[-lag_idx]  
+                #calc shap value as Coefficients*Values
+                shap_contributions[f'Shap_Lag_{lag_idx}']= coef_val*val   
+        #add constant term contribution            
+        shap_contributions['Shap_Constant'] =linear_const 
+    #return the final dictionary of contributions
     return shap_contributions

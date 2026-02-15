@@ -70,10 +70,10 @@ def run_experiment(config):
         #create system for this horizon
         df_system=df[available_targets + predictor_cols].copy()
         total_rows= len(df_system)  #total rows in data
-        requested_start_idx = df_system.index.get_loc(eval_start_date) #get index of start date
+        requested_start_idx = df_system.index.get_loc(eval_start_date)     #get index of start date
 
         if isinstance(requested_start_idx, slice):
-            requested_start_idx= requested_start_idx.start  #get integer index if slice
+            requested_start_idx= requested_start_idx.start    #get integer index if slice
         start_idx = max(requested_start_idx, training_offset)
         #initialize for recursive predictions
         current_idx= start_idx
@@ -253,7 +253,7 @@ def run_experiment(config):
             results_df = pd.DataFrame(results_storage[var_name])
             results_df.set_index('Date', inplace=True)
                 
-            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{h}m.csv"
+            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{var_name}_{h}m.csv"
             results_df.to_csv(save_name)
 
 if __name__ =="__main__":

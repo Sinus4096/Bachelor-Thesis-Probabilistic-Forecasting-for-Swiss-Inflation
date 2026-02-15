@@ -33,11 +33,6 @@ def load_cpi_data(file_path):
     data_long['Date'] =pd.to_datetime(data_long['Date'])
     #reshape so cols are the variables
     final_cpi_df=data_long.pivot(index='Date', columns='Position_D', values='Inflation') 
-
-    #calculate YoY log differences: ln(Index_t) - ln(Index_t-12), multiplied by 100 for percentage scale
-    #log_diff_df=np.log(df_pivot).diff(12) * 100  
-
-    # Rename columns and clean up
     #final_cpi_df=log_diff_df.reset_index()
     final_cpi_df.columns=['Core_CPI','Headline_CPI']
 

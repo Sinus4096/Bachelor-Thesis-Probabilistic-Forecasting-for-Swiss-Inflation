@@ -595,55 +595,5 @@ save_name=f"Code/Scripts/Plots/02_eda_raw/ADF_final.csv"
 adf_table.to_csv(save_name) 
 #remark:with experimetning, we can see that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
 #as the acf shows clear seasonal spikes when taking diff alone it's not stationary either
-#decision for CPI: like reference paper see word document.
+#decision for CPI: like reference paper 
 
-
-
-#-----------------------------------
-#yoy config
-df_growth[f'headline_direct'] =(np.log(df['Headline_CPI']).diff(12))* 100
-df_growth[f'core_direct']=(np.log(df['Core_CPI']).diff(12))* 100
-
-#do acf check for the cols to check whether look near stationary now:
-variables_to_plot= [f'headline_direct']+[f'core_direct']
-#restrict number of figures to 4 (only have 2 but want to keep code consistent)
-vars_per_fig=4
-#def chunknr for title
-chunk_nr=1
-
-#loop through variables in chunks
-for start_idx in range(0, len(variables_to_plot), vars_per_fig):
-    
-    #def current chunk
-    chunk =variables_to_plot[start_idx: start_idx+vars_per_fig]
-    n_vars =len(chunk)    #nr of vars in this chunk (is not 4 if last chunk)
-    
-    # Create fig. squeeze=False ensures 'axes' is ALWAYS a 2D array [row, col]
-    fig, axes=plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
-    
-    #loop through vars in chunk for acf/pacf plots
-    for i, var_name in enumerate(chunk):
-        #get data and drop NA's (before 2001)
-        series=df_growth[var_name].dropna()
-        
-        #acf plot
-        plot_acf(series, ax=axes[i, 0], lags=40, color=color_acf, title=f'ACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
-        #pacf plot
-        plot_pacf(series, ax=axes[i, 1], lags=40, color=color_acf, title=f'PACF: {var_name}', vlines_kwargs={"colors": color_acf})
-        
-        #styling
-        for ax in axes[i]:
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            ax.grid(True, axis='y', linestyle='--', alpha=0.5)
-            ax.set_ylim(-1.1, 1.1)
-            ax.tick_params(axis='both', which='major', labelsize=10)
-    #figure title for all chunks
-    fig.suptitle(f'ACF & PACF Plots of YoY-% Change Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
-    #plot
-    plt.tight_layout()
-    plt.show()
-    chunk_nr+=1
-
-#can also take the same approach for lags and will leave the sine and cosine terms in 
