@@ -70,6 +70,8 @@ def run_experiment():
 
     #use rolling window to capture structural breaks (set to minimum bc only 25 y data and dont want post covid era to depend on financial cirsis and peg era)
     rolling_window_size=10*12 
+    #to match bvar start training date:
+    training_offset =14
     #loop through targets and horizons to do recursive forecasts
     for target_name in targets:
         for h in horizons:
@@ -111,9 +113,12 @@ def run_experiment():
                 if last_trainable_idx < 0:
                     current_idx+= 1
                     continue
+                if last_trainable_idx <training_offset:   #check if need to wait bc of matching bvar
+                    current_idx +=retrain_step_months
+                    continue
                 
                 #train data: univariate-> only need target history up to current_idx: need most recent monthly data
-                y_full_series= df[target_col].iloc[:last_trainable_idx +1]      #full history up to end of window (only know j-month change that was completed before the change)
+                y_full_series = df[target_col].iloc[training_offset:last_trainable_idx + 1] #full history up to end of window (only know j-month change that was completed before the change)
                 #to define train data need to cut off old data if needed
                 if len(y_full_series)> rolling_window_size:
                     y_train= y_full_series.iloc[-rolling_window_size:].dropna()  
@@ -163,7 +168,7 @@ def run_experiment():
                     #de-annualize parameters for mean and volatility
                     scaling_factor=h/12
                     mu_yoy=base_effect+(mu_pred*scaling_factor) #reconstruct mean
-                    sigma_yoy=sigma_pred* np.sqrt(scaling_factor)    #scale only forecasted components volatility
+                    sigma_yoy = sigma_pred *scaling_factor#scale only forecasted components volatility
                 #ask model how many params needed
                 n_shape_params= model_res.model.distribution.num_params
                 #extract correct dist params

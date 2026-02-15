@@ -14,7 +14,7 @@ data:
 
 #specify default model           
 model:
-  use_residual_forecasting: false  #don't predict on residuals
+  use_linear_features: false  #don't predict on residuals
   use_pca_factors: true   #use pca factor to use less features
   pca:
     max_factors: 5

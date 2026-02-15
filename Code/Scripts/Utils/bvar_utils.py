@@ -84,7 +84,7 @@ class BVAR:
         self.n_exog= X_raw.shape[1] #nr exogenous features
         n_obs= len(data)
         
-        #define want lags 0, 1, 2
+        #define want lags 0, 1
         self.lag_indices =[0, 1]
         max_lag= self.h+1  #biggest lag
         #if less obs than max lag +1 -> cannot create lagged features-> raise error
@@ -401,16 +401,11 @@ class BVAR:
                     #get K and exog vars to adjust grid depending on features
                     K=self.n_features
                     exog=self.n_exog
-                    #smaller K/ few factors-> allow wider lambda
-                    if exog<= 6 and K<= 25:
-                        lambda_grid =[0.001, 0.003, 0.01, 0.03, 0.08, 0.15]
-                        theta_grid= [0.05, 0.1, 0.2, 0.4, 0.8, 1.2]
-                        decay_grid = [1.0, 2.0, 3.0]
-                    else:
-                        lambda_grid=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]
-                        theta_grid = [0.01, 0.03, 0.1, 0.3, 0.7]
-                        decay_grid= [2.0, 4.0, 6.0]
-                    start_eval = max(horizon + 24, int(0.75 * len(data)))
+
+                    lambda_grid = [0.02, 0.04, 0.08, 0.15, 0.30, 0.60]
+                    theta_grid= [0.1, 0.2, 0.3, 0.6, 1.0, 1.5, 2.5, 4.0]
+                    decay_grid = [0.0, 0.5, 1.0, 1.5, 2.0]
+                    start_eval = max(horizon + 24, int(0.6*len(data)))
                     step_tune = 4
                     n_draws_tune = 150
                     burn_in_tune = 50
@@ -424,6 +419,7 @@ class BVAR:
                     for a1 in lambda_grid:
                         for th in theta_grid:
                             for dec in decay_grid:
+                                np.random.seed(123)
                                 p_params = {
                                     "theta": float(th),
                                     "alpha_decay": float(dec),

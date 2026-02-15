@@ -1,5 +1,5 @@
 #the default with predicting Ridge to try to overcome the high PIT values during 
-experiment_name: "QRF_Default_Res_PCA"
+experiment_name: "QRF_Default_Lin_Feat_PCA"
 model_type: "qrf"
 
 #define the data used in the experiment
@@ -13,7 +13,7 @@ data:
 
 #specify default model           
 model:
-  use_residual_forecasting: true   #run the model on residuals using ridge
+  use_linear_features: true   
   use_pca_factors: true   #use pca factor to use less features
   pca:
     max_factors: 5

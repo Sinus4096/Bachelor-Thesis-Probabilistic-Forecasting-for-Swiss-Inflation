@@ -4,14 +4,12 @@ import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV, GridSearchCV,cross_val_predict
+
 from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from scipy.stats import nct
-from sklearn.linear_model import Ridge
-from sklearn.linear_model import ElasticNet
-from sklearn.decomposition import PCA
+
 
 
 #get path for utils
@@ -63,11 +61,13 @@ def run_experiment(config):
     eval_start_date= pd.Timestamp(config['data']['eval_start_date'])
 
     #for residual forecastin (in config file need residuals)
-    use_residuals = config['model'].get('use_residual_forecasting', False)
+    use_lin_feat = config['model'].get('use_linear_features', False)
     #get forecast method from config file
-    forecast_method = config['model'].get('forecast_method', 'reconstruct')
+    forecast_method=config['model'].get('forecast_method', 'reconstruct')
     #get whether will use pca factors or not
     use_pca_factors = bool(config.get("model", {}).get("use_pca_factors", False))
+    #to match training start of the bvar:
+    training_offset=14
 
     #iterate through all targets 
     for target_name in targets:
@@ -93,23 +93,19 @@ def run_experiment(config):
             #recursive out-of-sample predictions
             recursive_preds = []    #initialize storage for out-of-sample predictions
             #start time loop at eval_start_date-> get index location of eval_start_date 
-            start_idx = df.index.get_loc(eval_start_date)
+            requested_start_idx = df.index.get_loc(eval_start_date)
+            if isinstance(requested_start_idx, slice):
+                requested_start_idx = requested_start_idx.start
+            start_idx= max(requested_start_idx, training_offset)  #choose startidx to match with bvar
+            current_idx= start_idx
+
             if isinstance(start_idx, slice):    #if get_loc returns slice->handle
                 start_idx= start_idx.start
             total_rows= len(df) #get length of the original df
-            if use_residuals:
-                linear_preds = generate_linear_feature_oof(
-                    df=df, 
-                    target_col=target_col, 
-                    target_cols_to_drop=target_cols_to_drop, 
-                    h=h, 
-                    config=config,              # <--- PASS CONFIG
-                    use_pca=use_pca_factors,    # <--- PASS PCA FLAG
-                    window_size=120, 
-                    min_train=40
-                )
-                
-                df['Linear_Pred'] = linear_preds
+            if use_lin_feat:
+                linear_preds = generate_linear_feature_oof(df=df, target_col=target_col, target_cols_to_drop=target_cols_to_drop, 
+                    h=h, config=config, use_pca=use_pca_factors, window_size=120, min_train=40)                
+                df['Linear_Pred'] = linear_preds  #add the linear features
             #initialize the recursive loop and then iterate til to end of df
             current_idx= start_idx
             while current_idx <total_rows:
@@ -173,7 +169,7 @@ def run_experiment(config):
                     X_train['Linear_Pred'] = lp_train
                     X_test['Linear_Pred'] = lp_test
                 #if configured to use residual forecasting
-                if use_residuals:
+                if use_lin_feat:
                     # Check if current X_test has a valid Linear_Pred
                     if pd.isna(X_test['Linear_Pred'].values[0]):
                         # Fallback if the linear model didn't produce a prediction for today
@@ -201,17 +197,7 @@ def run_experiment(config):
                 #calculate shapley values for the qrf tree part
                 shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
                 #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
-                shap_combined= shap_tree.copy()
-                #combine shap values if residual forecasting
-                #if use_residuals:
-                    #merge keys
-                    #all_keys= set(shap_tree.keys()) | set(shap_linear.keys()) 
-                    #look through keys
-                    #for k in all_keys:
-                        #sum values, get 0 if key missing
-                        #tree_val= shap_tree.get(k, 0.0)  #tree part
-                        #linear_val= shap_linear.get(k, 0.0)  #linear part
-                        #shap_combined[k]= tree_val + linear_val  #combine                
+                shap_combined= shap_tree.copy()           
                 #check if target date exists in df_yoy (if not, cannot evaluate)
                 if target_date in df_yoy.index:
                         

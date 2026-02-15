@@ -89,6 +89,11 @@ def run_experiment(config):
             #get date
             forecast_date= df_system.index[current_idx]
             target_date=forecast_date+pd.DateOffset(months=h)
+            #skip if not a training and forecasting month 
+            if forecast_date.month not in snb_months:
+                current_idx+= 1
+                months_since_last_tune += 1  #want to check monthly
+                continue
             #prepare training data up to current idx 
             df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=available_targets)
             X_test = df_system.iloc[current_idx - lags : current_idx + 1]
@@ -139,17 +144,12 @@ def run_experiment(config):
             #else use lambda from last tuning
             else:
                 if 'independent_niw' in prior_type:
-                    # Independent NIW uses a1/a2/a3 usually, not 'lambda'
-                    model.fit(df_train, horizon=h) 
+                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.08)))
                 else:
-                    # Minnesota/Natural NIW
                     model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
-                
                 months_since_last_tune += 1
-            #skip if not a training and forecasting month 
-            if forecast_date.month not in snb_months:
-                current_idx += 1
-                continue
+
+
             #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
             if target_date not in df_yoy.index:
                 current_idx+= 1

@@ -83,7 +83,7 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     #capture loading matrix (variables x factors)
     loadings=pd.DataFrame(pca.components_.T, index=pca_cols, columns=[f"Factor_{i+1}" for i in range(r)])
     #def output path for components of the factors
-    out_path = Path("Results/Factor_Summaries/Factor_Summary_BVAR_indep_niw.csv")
+    out_path = Path("Results/Factor_Summaries/Factor_Summary_bvar_indep_niw.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     #initialize dict to get summary what factor contains what
     factor_details = []
@@ -124,8 +124,8 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
     #ts splits def
     n_eff=len(y_full)
     n_splits_eff =min(5, max(2, n_eff //15))  #5 splits only if have enough data
-    tscv =TimeSeriesSplit(n_splits=n_splits_eff, gap=h)
-
+    cv_gap = 0 if h >= 6 else h   
+    tscv =TimeSeriesSplit(n_splits=n_splits_eff, gap=cv_gap)
     #check if pca reduction is requested
     if use_pca: 
         #get columns to be reduced vs columns to keep as-is
@@ -136,17 +136,14 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
         pca_cols=[] 
         #all features are treated as keep_cols
         keep_cols =list(X_full.columns) 
-
-    #set cross validation splits
-    n_splits=5 
     #check if horizon is long term
-    if h >= 12: 
+    if h>= 12: 
         #use higher alpha grid for long horizons
-        enet= ElasticNetCV(l1_ratio=[0.50, 0.65, 0.80, 0.90, 0.95, 0.99], alphas=[50, 100, 250, 500, 1000], cv=tscv, n_jobs=-1)
+        enet= ElasticNetCV(l1_ratio=[0.01, 0.03, 0.05, 0.10, 0.20], alphas=np.logspace(-3, 2.5, 60), cv=tscv, n_jobs=-1,max_iter=1_000_000, tol=1e-4)
     #else use short term grid
     else: 
         #standard alpha grid for short horizons
-        enet= ElasticNetCV(l1_ratio=[0.05, 0.10, 0.20, 0.35, 0.50], alphas=[0.1,0.5, 1.0,25, 10.0, 50.0], cv=tscv, n_jobs=-1)
+        enet= ElasticNetCV(l1_ratio=[0.05, 0.10, 0.20, 0.35, 0.50], alphas=[0.1,0.5, 1.0,25, 10.0, 50.0], cv=tscv, n_jobs=-1, max_iter=1_000_000, tol=1e-4)
     #initialize the standard scaler
     scaler = StandardScaler() 
 
@@ -178,7 +175,7 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
         X_train_clean= X_train_raw[valid_mask] 
         
         #validate if enough samples remain for CV and check variance
-        if len(y_train_clean) <(n_splits+2) or y_train_clean.std()== 0: 
+        if len(y_train_clean) <(n_splits_eff +2) or y_train_clean.std()== 0: 
             #default to zero if training is impossible
             preds.iloc[i] = 0.0 
             #skip to next iteration

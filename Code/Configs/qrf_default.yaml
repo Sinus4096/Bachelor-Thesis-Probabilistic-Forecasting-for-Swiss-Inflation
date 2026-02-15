@@ -13,7 +13,7 @@ data:
 
 #specify default model           
 model:
-  use_residual_forecasting: false  #don't predict on residuals
+  use_linear_features: false  #don't predict on residuals
   density_method: "skew-t"
   params:
     n_estimators: 1000    #nr. of decision trees used: ECB used 500 but meinshausen recommended 1000
