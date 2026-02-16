@@ -383,7 +383,7 @@ class BVAR:
         elif 'independent_niw' in self.prior_type:
             #def hyperpar
             a3= float(self.params.get('alpha', 100.0))    #intecept variance scale
-            a2_default = float(self.params.get('theta', 0.2)) 
+            a2_default = float(self.params.get('theta', 0.01)) 
             #nr of iters and burn in 
             n_iter=int(self.params.get('sampling', {}).get('n_draws', n_draws))
             burn_in_local= int(self.params.get('sampling', {}).get('burn_in', burn_in))
@@ -402,9 +402,9 @@ class BVAR:
                     K=self.n_features
                     exog=self.n_exog
 
-                    lambda_grid = [0.02, 0.04, 0.08, 0.15, 0.30, 0.60]
-                    theta_grid= [0.1, 0.2, 0.3, 0.6, 1.0, 1.5, 2.5, 4.0]
-                    decay_grid = [0.0, 0.5, 1.0, 1.5, 2.0]
+                    lambda_grid = [0.005, 0.01, 0.02, 0.04, 0.1]
+                    theta_grid= [0.01,0.02, 0.03, 0.1, 0.3]
+                    decay_grid = [1.0, 1.5, 2.0]
                     start_eval = max(horizon + 24, int(0.6*len(data)))
                     step_tune = 4
                     n_draws_tune = 150

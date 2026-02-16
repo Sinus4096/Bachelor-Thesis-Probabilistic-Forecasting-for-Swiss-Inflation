@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import sys
 import os
 import re
 from pathlib import Path
@@ -17,25 +17,69 @@ from scipy.stats import nct
 # CONFIG (only edit these)
 # ============================================================
 #what to compare
-data_type= "Core"   #plot core or headline in comparison
+data_type= "Headline"   #plot core or headline in comparison
 horizons = [3, 6, 9, 12]     #comparison at all horizons ahead
 rolling_window =36   #36= ca 3 years for monthly data
 crps_col = "Parametric_CRPS"    # or "Empirical_CRPS"
 
 # EXACTLY 3 models (used as columns in grids)
 # Matching rule: model key must appear in filename (case-insensitive, non-alnum ignored)
-models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical","QRF_Default_PCA"]
+models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical","QRF_Default"]
 
 # If you want to restrict to specific subfolders under Results, set to [] to scan everything.
 results_subfolder: List[str] = []
 
-#get df
-#path ='Data/Cleaned_Data/data_stationary.csv'
-#df=pd.read_csv(path, index_col='Date', parse_dates=True)
-#features=[col for col in df.columns if 'target_' not in col]
+
 # ============================================================
 # PATH + FILENAME PARSING (robust to your repo structure)
 # ============================================================
+
+
+
+# ============================================================
+# SHAP / INTERPRETABILITY CONFIG
+# ============================================================
+# If you have a "features" dataset with predictors by origin Date, set a filename hint.
+# The code will try to auto-find it under project root; if not found, scatters will be skipped.
+
+
+
+
+# Grouping for "Shapley Bars" (edit to match your variable names!)
+# These should correspond to SHAP column suffixes AFTER "Shap_".
+# Example: Shap_Euribor, Shap_Unemployment, Shap_InflExp...
+shap_group_map = {
+    "Real Activity": [
+        "Unemployment", "IP", "PMI", "GDP", "CapacityUtil", "RetailSales",
+    ],
+    "Wages": [
+        "WageGrowth", "UnitLaborCosts", "CompPerEmp",
+    ],
+    "Inflation Expectations": [
+        "InflExp", "SurveyExp", "Breakeven",
+    ],
+    "Financial Conditions": [
+        "Euribor", "TermSpread", "CreditSpread", "FX", "Equities",
+    ],
+    "Energy / Commodities": [
+        "Oil", "Gas", "Commodities",
+    ],
+    # Any SHAP variables not matched above will be grouped into "Other"
+}
+
+# For "Predictive Relationship (Shapley Scatters)" and "Functional Form" checks:
+shap_scatter_vars = ["Euribor", "Unemployment", "InflExp"]  # variable names as in features & shap suffix
+
+# Heatmap settings
+shap_heatmap_top_n = 60        # show top N variables by average |SHAP|
+shap_heatmap_freq = "Q"        # resample time index: "M", "Q", "A" etc. (monthly/quarterly/annual)
+shap_heatmap_value = "abs"     # "abs" for |shap|, or "raw" for signed shap
+
+# Skewness / tail-risk series smoothing
+tailrisk_rolling = 12  # months for smoothing; set 1 for none
+
+# -----------------------------
+   
 
 HORIZON_RE = re.compile(r"(?<!\d)(\d{1,2})m(?!\d)", re.IGNORECASE)
 
@@ -92,6 +136,88 @@ def find_actuals_file(project_root: Path) -> Path:
 
     candidates.sort(key=score, reverse=True)
     return candidates[0]
+
+
+def find_stationary_features_file(project_root: Path) -> Path:
+    """
+    Find data_stationary.csv anywhere under the project root (case-insensitive).
+    Prefers paths containing 'Cleaned' and 'Data'.
+    """
+    candidates = list(project_root.rglob("data_stationary.csv"))
+    if not candidates:
+        candidates = [p for p in project_root.rglob("*.csv") if p.name.lower() == "data_stationary.csv"]
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"Could not find 'data_stationary.csv' anywhere under {project_root}. "
+            f"Expected something like Code/Data/Cleaned_Data/data_stationary.csv."
+        )
+
+    def score(p: Path) -> int:
+        s = str(p).lower()
+        sc = 0
+        if "cleaned" in s: sc += 3
+        if "data" in s: sc += 2
+        if "code" in s: sc += 1
+        if "result" in s: sc -= 2
+        return sc
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[0]
+
+
+def load_stationary_features(path: Path) -> tuple[pd.DataFrame, List[str]]:
+    """
+    Loads stationary feature matrix with Date index and returns (X, features_list).
+    """
+    df = pd.read_csv(path, index_col="Date", parse_dates=True).sort_index()
+    features = [c for c in df.columns if "target_" not in c]
+    X = df[features].copy()
+    return X, features
+
+def shap_columns(df: pd.DataFrame) -> List[str]:
+    return [c for c in df.columns if c.startswith("Shap_") and c != "Shap_Base_Effect"]
+
+def shap_suffix(col: str) -> str:
+    return col.replace("Shap_", "", 1)
+
+def parse_filename(path: Path, model_keys: List[str]) -> Optional[FileMeta]:
+    """
+    Identify (model, variable, horizon) from filename.
+    - variable: contains 'headline' or 'core'
+    - horizon: contains '3m', '6m', ...
+    - model: contains one of model_keys (normalized contains)
+    """
+    name = path.name
+    lname = name.lower()
+
+    # variable
+    if "headline" in lname:
+        variable = "Headline"
+    elif "core" in lname:
+        variable = "Core"
+    else:
+        return None
+
+    # horizon
+    mh = HORIZON_RE.search(name)
+    if not mh:
+        return None
+    horizon = int(mh.group(1))
+
+    # model match (best/longest normalized match)
+    n_name = normalize(name)
+    matched = None
+    best = -1
+    for key in model_keys:
+        nk = normalize(key)
+        if nk and nk in n_name and len(nk) > best:
+            best = len(nk)
+            matched = key
+    if matched is None:
+        return None
+
+    return FileMeta(path=path, model_key=matched, variable=variable, horizon=horizon)
 
 
 def dkw_band(n: int, alpha: float = 0.05) -> float:
@@ -161,7 +287,66 @@ def main() -> None:
     print(f"[INFO] Results dir  : {results_dir}")
     print(f"[INFO] Actuals file : {actuals_path}")
 
-    
+    actuals = load_actuals(actuals_path, data_type)
+        # Load stationary features (X) for SHAP scatters / functional form
+    try:
+        feats_path = find_stationary_features_file(project_root)
+        X, feature_list = load_stationary_features(feats_path)
+        print(f"[INFO] Stationary features file: {feats_path}")
+        print(f"[INFO] Features loaded: {len(feature_list)}")
+    except Exception as e:
+        X, feature_list = None, []
+        print(f"[WARN] Could not load stationary features for SHAP scatters: {e}")
+
+    # data[model][horizon] = df
+    data: Dict[str, Dict[int, pd.DataFrame]] = {m: {} for m in models_compare}
+
+    # optionally restrict scan
+    scan_roots = [results_dir]
+    if results_subfolder:
+        scan_roots = [(results_dir / s) for s in results_subfolder]
+
+    found: List[FileMeta] = []
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("*.csv"):
+            meta = parse_filename(p, models_compare)
+            if meta is None:
+                continue
+            if meta.variable != data_type:
+                continue
+            if meta.horizon not in horizons:
+                continue
+            found.append(meta)
+
+    if not found:
+        raise RuntimeError(
+            "No matching forecast CSVs found.\n"
+            "Check that your filenames contain:\n"
+            "  - 'Headline' or 'Core'\n"
+            "  - horizon like '3m', '6m', '9m', '12m'\n"
+            f"  - and one of: {models_compare}\n"
+            f"Scanned: {scan_roots}"
+        )
+
+    errors = []
+    for meta in found:
+        try:
+            df = load_forecast(meta.path, actuals)
+            data[meta.model_key][meta.horizon] = df
+        except Exception as e:
+            errors.append((meta.path, str(e)))
+
+    print("\n[INFO] Loaded horizons per model:")
+    for m in models_compare:
+        print(f"  - {m}: {sorted(data[m].keys())}")
+
+    if errors:
+        print("\n[WARN] Some files failed to load (showing up to 15):")
+        for p, msg in errors[:15]:
+            print(f"  - {p}: {msg}")
+
     # -----------------------------
     # 1) PIT CALIBRATION GRID
     # -----------------------------
@@ -391,6 +576,193 @@ def main() -> None:
         plot_density_for_origin(latest_origin, horizon=default_h)
     else:
         print("[WARN] Skipping density plot (missing Date column or missing data).")
+    
+     # 6) SHAP SCATTERS / FUNCTIONAL FORM
+    # -----------------------------
+    # Requires: Shap_<var> columns in result CSVs + X[var] in data_stationary.csv (indexed by origin Date)
+    shap_vars = ["Euribor", "Unemployment", "InflExp"]  # <-- change to your actual variable names
+
+    if X is None:
+        print("[WARN] Skipping SHAP scatters (no stationary features loaded).")
+    else:
+        for h in horizons:
+            for model in models_compare:
+                df = data.get(model, {}).get(h)
+                if df is None:
+                    continue
+
+                s_cols = shap_columns(df)
+                if not s_cols:
+                    continue
+
+                if "Date" not in df.columns:
+                    print(f"[INFO] Skipping SHAP scatters for {model}, h={h} (missing Date/origin).")
+                    continue
+
+                origin_dates = pd.to_datetime(df["Date"], errors="coerce")
+                if origin_dates.isna().all():
+                    continue
+
+                for var in shap_vars:
+                    shap_col = f"Shap_{var}"
+                    if shap_col not in df.columns:
+                        # Not all models/horizons have all SHAP cols
+                        continue
+                    if var not in X.columns:
+                        print(f"[INFO] Var '{var}' not found in stationary features. Skipping.")
+                        continue
+
+                    shap_v = pd.to_numeric(df[shap_col], errors="coerce")
+                    x_v = origin_dates.map(X[var])  # align predictor by origin Date
+
+                    tmp = pd.DataFrame(
+                        {"x": pd.to_numeric(x_v, errors="coerce"), "shap": shap_v},
+                        index=origin_dates
+                    ).dropna()
+
+                    if len(tmp) < 30:
+                        continue
+
+                    plt.figure(figsize=(9, 6))
+                    plt.scatter(tmp["x"], tmp["shap"], alpha=0.6)
+                    plt.axhline(0.0, linewidth=1.2)
+                    plt.title(
+                        f"Functional Form (SHAP vs X) – {data_type} – {model} – h={h}m – {var}",
+                        fontweight="bold"
+                    )
+                    plt.xlabel(f"{var} (stationary feature at origin)")
+                    plt.ylabel(f"SHAP({var}) contribution")
+                    plt.grid(True, alpha=0.25)
+                    plt.tight_layout()
+                    plt.show()
+# -----------------------------
+    # 8) SKEWNESS & TAIL RISK CHARTS (alpha and nu proxies)
+    # -----------------------------
+    # Based on your columns:
+    # - nc_skewt acts as a skew/noncentrality parameter (proxy for slant/asymmetry)
+    # - df_skewt is degrees of freedom (tail thickness proxy; lower df -> fatter tails)
+    #
+    # We'll plot these over Target_date for each model/horizon similar to your rolling CRPS.
+        # -----------------------------
+    # 8) SKEWNESS & TAIL RISK CHARTS
+    # -----------------------------
+    # nc_skewt (skew proxy)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    axes = axes.flatten()
+
+    for idx, h in enumerate(horizons):
+        ax = axes[idx]
+        any_line = False
+
+        for model in models_compare:
+            dfh = data.get(model, {}).get(h)
+            if dfh is None or "nc_skewt" not in dfh.columns:
+                continue
+
+            nc = pd.to_numeric(dfh["nc_skewt"], errors="coerce")
+            if tailrisk_rolling and tailrisk_rolling > 1:
+                nc = nc.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+
+            ax.plot(nc.index, nc.values, linewidth=2.0, label=model)
+            any_line = True
+
+        ax.set_title(f"Skewness proxy (nc_skewt) – {data_type} – h={h}m", fontweight="bold")
+        ax.set_ylabel("nc_skewt")
+        ax.grid(True, alpha=0.25)
+        if any_line:
+            ax.legend()
+
+    for k in range(len(horizons), 4):
+        axes[k].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    # df_skewt (tail thickness proxy)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    axes = axes.flatten()
+
+    for idx, h in enumerate(horizons):
+        ax = axes[idx]
+        any_line = False
+
+        for model in models_compare:
+            dfh = data.get(model, {}).get(h)
+            if dfh is None or "df_skewt" not in dfh.columns:
+                continue
+
+            nu = pd.to_numeric(dfh["df_skewt"], errors="coerce")
+            if tailrisk_rolling and tailrisk_rolling > 1:
+                nu = nu.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+
+            ax.plot(nu.index, nu.values, linewidth=2.0, label=model)
+            any_line = True
+
+        ax.set_title(f"Tail thickness proxy (df_skewt) – {data_type} – h={h}m", fontweight="bold")
+        ax.set_ylabel("df_skewt (lower=fatter tails)")
+        ax.grid(True, alpha=0.25)
+        if any_line:
+            ax.legend()
+
+    for k in range(len(horizons), 4):
+        axes[k].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
+    # -----------------------------
+    # 9) VARIABLE RANKING HEATMAP (SHAP over time)
+    # -----------------------------
+    # Heatmap across time (Target_date) for top-N variables by average |SHAP|
+    shap_models_use = models_compare
+
+    for model in shap_models_use:
+            for h in horizons:
+                df = data.get(model, {}).get(h)
+                if df is None:
+                    continue
+
+                shap_cols = shap_columns(df)
+                if not shap_cols:
+                    continue
+
+                S = df[shap_cols].copy()
+                # Use Target_date index already (df indexed by Target_date in load_forecast)
+                # Optional resample to reduce density
+                if shap_heatmap_freq:
+                    try:
+                        S = S.resample(shap_heatmap_freq).mean()
+                    except Exception:
+                        pass
+
+                # Rank variables
+                if shap_heatmap_value == "abs":
+                    rank = S.abs().mean().sort_values(ascending=False)
+                    S_plot = S.abs()
+                    title_val = "|SHAP|"
+                else:
+                    rank = S.mean().abs().sort_values(ascending=False)
+                    S_plot = S
+                    title_val = "SHAP"
+
+                top_cols = list(rank.head(shap_heatmap_top_n).index)
+                S_plot = S_plot[top_cols]
+
+                # Rename columns to suffix-only for readability
+                S_plot = S_plot.rename(columns={c: shap_suffix(c) for c in S_plot.columns})
+
+                plt.figure(figsize=(14, 8))
+                sns.heatmap(S_plot.T, cmap="viridis")  # transpose: variables on y-axis
+                plt.title(
+                    f"SHAP Variable Heatmap ({title_val}) – {data_type} – {model} – h={h}m\n"
+                    f"Top {min(shap_heatmap_top_n, len(top_cols))} vars | resample={shap_heatmap_freq}",
+                    fontweight="bold"
+                )
+                plt.xlabel("Target date (resampled)")
+                plt.ylabel("Variable")
+                plt.tight_layout()
+                plt.show()
 
 
 

@@ -21,7 +21,6 @@ sys.path.insert(0, str(scripts_root))
 #import needed utils
 from Scripts.Utils.metrics import calculate_crps, calculate_rmse, calculate_crps_quantile, shap_values
 from Scripts.Utils.density_fitting import fit_skew_t
-from Scripts.Utils.PCA import get_pca, make_factor_features_time_safe
 from Scripts.Utils.qrf_utils import generate_linear_feature_oof, get_pca, make_factor_features_time_safe
 
 
@@ -73,6 +72,8 @@ def run_experiment(config):
     for target_name in targets:
         #iterate through all horizons defined in script 03
         for h in horizons:
+            #just once pca to get interpretability
+            pca_bundle_fixed = None
             #setup data for this specific horizon of specific target (eg 3mont CPI forecast)
             if target_name =="Headline":
                 target_col= f"target_headline_{h}m" #set target_col as defined in script 03
@@ -152,18 +153,18 @@ def run_experiment(config):
                 X_train= X_train.loc[Y_train.index]
                 if lp_train is not None:
                     lp_train = lp_train.loc[Y_train.index]
-                X_train_raw = X_train.copy()
-                X_test_raw = X_test.copy()
-                #fit standard scaler recursively
-                scaler = StandardScaler()
-                X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns, index=X_train.index)
-                X_test = pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
+                
                 if use_pca_factors:
                     #decide PCA block vs kept columns (AR + seasonals)
                     pca_cols, keep_cols = get_pca(df_columns=X_train.columns, target_cols_to_drop=target_cols_to_drop, target_name=target_name, config=config)
-                    #fit scaler+PCA on train
-                    X_train, X_test, pca_info = make_factor_features_time_safe(X_train=X_train,  X_test=X_test, pca_cols=pca_cols,keep_cols=keep_cols,
-                    config=config, forecast_date=forecast_date, target_name=target_name, h=h, top_k=5,)
+                    # FIRST iteration: fit PCA
+                    if pca_bundle_fixed is None:
+                        X_train, X_test, pca_bundle_fixed = make_factor_features_time_safe(X_train=X_train, X_test=X_test, pca_cols=pca_cols, keep_cols=keep_cols, config=config, forecast_date=forecast_date, target_name=target_name, h=h,  top_k=5, pca_bundle=None )
+
+                    # LATER iterations: reuse
+                    else:
+                        X_train, X_test, _ = make_factor_features_time_safe( X_train=X_train, X_test=X_test, pca_cols=pca_bundle_fixed["pca_cols"], keep_cols=pca_bundle_fixed["keep_cols"], config=config, forecast_date=forecast_date, target_name=target_name, h=h, top_k=5, pca_bundle=pca_bundle_fixed)
+                                    
                 if lp_train is not None:
                     # Concatenate back to the processed DataFrames
                     X_train['Linear_Pred'] = lp_train

@@ -61,29 +61,40 @@ def choose_r_from_train_std(X_train_std, config):
     return r
 
 
-def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config, forecast_date=None, target_name=None, h=None, top_k=5):
+def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config, forecast_date=None, target_name=None, h=None, top_k=5, pca_bundle=None):
     """
     fit StandardScaler + PCA on traindata, transform train+test"""
-    #setup and fit the scaler on the training data only (avoiding data leakage)
-    scaler= StandardScaler()
-    X_train_std= scaler.fit_transform(X_train[pca_cols])
-    #determine the number of factors and fit the PCA on training data
-    r= choose_r_from_train_std(X_train_std, config)  #call fct to get r
-    pca = PCA(n_components=r) #get pca
-    F_train=pca.fit_transform(X_train_std)  #fit train data w pca
-    #do sign check for linear part: if factor sign flips between recursive windows, linear coeffs jump wildly
-    for i in range(pca.components_.shape[0]):
-        #if first element vec is negative, flip the sign
-        if pca.components_[i, 0]< 0:
-            pca.components_[i, :]*= -1
-            F_train[:, i] *=-1   #also sign of the scores flip
+    if pca_bundle is None:
+        # === FIT PCA (first time only) ===
+        scaler = StandardScaler()
+        X_train_std = scaler.fit_transform(X_train[pca_cols])
+
+        r = choose_r_from_train_std(X_train_std, config)
+        pca = PCA(n_components=r)
+        F_train = pca.fit_transform(X_train_std)
+
+        # sign stabilization
+        for i in range(pca.components_.shape[0]):
+            if pca.components_[i, 0] < 0:
+                pca.components_[i, :] *= -1
+                F_train[:, i] *= -1
+
+    else:
+        # === REUSE EXISTING PCA ===
+        scaler = pca_bundle["scaler"]
+        pca = pca_bundle["pca"]
+        r = pca_bundle["r"]
+
+        X_train_std = scaler.transform(X_train[pca_cols])
+        F_train = pca.transform(X_train_std)
+
     #apply the same scaling and PCA transformation to the test set
     X_test_std= scaler.transform(X_test[pca_cols])
     F_test= pca.transform(X_test_std)
     #capture loading matrix (variables x factors)
     loadings=pd.DataFrame(pca.components_.T, index=pca_cols, columns=[f"Factor_{i+1}" for i in range(r)])
     #def output path for components of the factors
-    out_path = Path("Results/Factor_Summaries/Factor_Summary_bvar_indep_niw.csv")
+    out_path = Path("Results/Factor_Summaries/Factor_Summary_QRF_Default_PCA.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     #initialize dict to get summary what factor contains what
     factor_details = []
@@ -108,13 +119,16 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     #raw features and the new PCA factors together for the final model input
     X_train_final= pd.concat([kept_train, F_train_df], axis=1)
     X_test_final =pd.concat([kept_test,  F_test_df], axis=1)
-    return X_train_final, X_test_final, {"r": r, "pca_cols": pca_cols, "keep_cols": keep_cols, "scaler": scaler, "pca": pca}
+    #bundle to return:
+    bundle = {"r": r, "pca_cols": pca_cols, "keep_cols": keep_cols, "scaler": scaler, "pca": pca,}
+    return X_train_final, X_test_final, bundle
 
 #linear features
 #----------------------------------
 def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, use_pca=False, window_size=120, min_train=40):
     """
     lin pred with walk forward approach, and pca if requestesd"""
+    pca_bundle = None
     #drop the target related columns to get feature matrix
     X_full=df.drop(columns=target_cols_to_drop) 
     #isolate the target column for training
@@ -130,6 +144,25 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
     if use_pca: 
         #get columns to be reduced vs columns to keep as-is
         pca_cols, keep_cols= get_pca(df_columns=X_full.columns, target_cols_to_drop=[], target_name=None,  config=config)
+        if use_pca and pca_bundle is None:
+            # Fit PCA ONCE on full available sample (or better: first training window)
+            scaler_full = StandardScaler()
+            initial_train_end = min_train
+            X_initial = X_full.iloc[:initial_train_end]
+
+            Z_full = scaler_full.fit_transform(X_initial[pca_cols])
+
+            r = choose_r_from_train_std(Z_full, config)
+            pca_full = PCA(n_components=r)
+            pca_full.fit(Z_full)
+
+            # sign stabilization
+            for j in range(pca_full.components_.shape[0]):
+                if pca_full.components_[j, 0] < 0:
+                    pca_full.components_[j, :] *= -1
+
+            pca_bundle = {"scaler": scaler_full, "pca": pca_full, "r": r}
+
     #if no pca use all columns as keep columns
     else: 
         #no pca columns selected
@@ -200,25 +233,14 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
             #handle columns requiring pca
             if len(pca_cols) > 0: 
                 #setup and fit the scaler on the training data only (avoiding data leakage)
-                X_train_std= scaler.fit_transform(X_train_clean[pca_cols]) 
-                #determine the number of factors and fit the PCA on training data
-                r= choose_r_from_train_std(X_train_std, config) #call fct to get r
-                #initialize pca with dynamic r
-                pca = PCA(n_components=r) #get pca
-                #fit train data w pca
-                F_train=pca.fit_transform(X_train_std) 
-                #do sign check for linear part: if factor sign flips between recursive windows, linear coeffs jump wildly
-                for j in range(pca.components_.shape[0]): 
-                    #if first element vec is negative, flip the sign
-                    if pca.components_[j, 0]< 0: 
-                        #invert the component loadings
-                        pca.components_[j, :]*= -1 
-                        #invert the factor scores
-                        F_train[:, j] *=-1 #also sign of the scores flip
-                #apply the same scaling and PCA transformation to the test set
-                X_test_std= scaler.transform(X_test_raw[pca_cols]) 
-                #project test data into factor space
-                F_test= pca.transform(X_test_std) 
+                scaler_full = pca_bundle["scaler"]
+                pca_full = pca_bundle["pca"]
+
+                X_train_std = scaler_full.transform(X_train_clean[pca_cols])
+                F_train = pca_full.transform(X_train_std)
+
+                X_test_std = scaler_full.transform(X_test_raw[pca_cols])
+                F_test = pca_full.transform(X_test_std)
                 #horizontally stack keep features and factors for train
                 X_train_final = np.hstack([X_train_keep, F_train]) 
                 #horizontally stack keep features and factors for test

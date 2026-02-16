@@ -2,7 +2,6 @@ import sys
 import pandas as pd
 import numpy as np
 from scipy import stats
-from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from pathlib import Path
@@ -93,18 +92,25 @@ def run_experiment(config):
             if forecast_date.month not in snb_months:
                 current_idx+= 1
                 months_since_last_tune += 1  #want to check monthly
+                continue          
+
+            #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
+            if target_date not in df_yoy.index:
+                current_idx+= 1
+                continue
+            #targets only know if they finished before forecast date
+            train_end_idx= current_idx-h
+            if train_end_idx< lags: # Need enough data for lags
+                current_idx+= 1
                 continue
             #prepare training data up to current idx 
             df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=available_targets)
             X_test = df_system.iloc[current_idx - lags : current_idx + 1]
-            #initialize for standardization
-            #scaler=StandardScaler()
-            #fit scaler on training data predictors
-            #df_train=pd.DataFrame(scaler.fit_transform(df_train), index=df_train.index, columns=df_train.columns)
+            
             if use_pca_factors:
                 # 1. Store the targets separately before they get lost
-                targets_to_keep = df_train[available_targets].copy()
-                
+                targets_train = df_train[available_targets].copy()
+                targets_test  = X_test[available_targets].copy()               
                 # 2. Decide PCA block vs kept columns
                 pca_cols, keep_cols = get_pca(df_columns=df_system.columns, 
                                              target_cols_to_drop=current_target_cols, 
@@ -120,7 +126,11 @@ def run_experiment(config):
                 )
 
                 # 4. RE-ATTACH TARGETS HERE
-                df_train = pd.concat([targets_to_keep, df_train], axis=1)
+                df_train = pd.concat([targets_train, df_train], axis=1)
+                X_test   = pd.concat([targets_test,  X_test], axis=1)
+                #enforce identical column order between train and test
+                X_test = X_test.reindex(columns=df_train.columns)
+                
             #determine if need to retune
             should_tune=False
             #if first run-> tune:
@@ -144,26 +154,14 @@ def run_experiment(config):
             #else use lambda from last tuning
             else:
                 if 'independent_niw' in prior_type:
-                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.08)))
+                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.2)))
                 else:
                     model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
                 months_since_last_tune += 1
-
-
-            #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
-            if target_date not in df_yoy.index:
-                current_idx+= 1
-                continue
-            #targets only know if they finished before forecast date
-            train_end_idx= current_idx-h
-            if train_end_idx< lags: # Need enough data for lags
-                current_idx+= 1
-                continue
             
             #def test set and include enough previous obs for lags
-            X_test= df_system.iloc[current_idx- lags : current_idx+ 1]
-            #transform test set with scaler fitted on training data
-            #X_test= pd.DataFrame(scaler.transform(X_test), index=X_test.index, columns=X_test.columns)
+            if not use_pca_factors:
+               X_test =df_system.iloc[current_idx -lags:current_idx+1]
             #forecast
             preds_draws_all=model.forecast(X_test)
             
@@ -178,12 +176,7 @@ def run_experiment(config):
 
                 #calc shapley values
                 shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
-                #get scaler stats for shapley values
-                target_col_idx= df_system.columns.get_loc(target_col_name)  #get index of target col in system
-                #target_mean= scaler.mean_[target_col_idx]  #get mean of target col from scaler
-                #target_scale= scaler.scale_[target_col_idx]  #get scale of target col from scaler
-                #unscale the draws for evaluation and shapley value rescaling
-                #preds_draws= (preds_draws*target_scale)+target_mean
+
                 #get actual yoy value
                 actual_yoy=df_yoy.loc[target_date, var_name]
                 #to calc price levels need levelsof core and headline cpi
@@ -192,7 +185,7 @@ def run_experiment(config):
                 if h==12:
                     preds_draws_yoy=preds_draws
                     #shapley scaling: standard deviation
-                    #shap_scaling = target_scale
+                    shap_scaling = 0
                     base_shap_effect=0 #since we are forecasting the change from t-12 to t, the base effect is 0 (no change) and the shapley values show how much each feature contributes to deviating from this base effect
                 else:
                     #for h<12: combine history with deannualized model predictions
@@ -209,15 +202,14 @@ def run_experiment(config):
                     scaling_factor= h/12
                     preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
                     #shapley scaling: scale the shapley values by the same factor to reflect their contribution to the deannualized forecast
-                    #shap_scaling= target_scale*scaling_factor
+                    shap_scaling= scaling_factor
                     base_shap_effect= base_effect  #the base effect is the deannualized change, and the shapley values show how much each feature contributes to deviating from this deannualized change
 
                 #rescale shapley values from standardized units to YoY units
                 final_shap={}                
-                #for k, v in shap_dict.items():
-                    #scale back to original units 
-                    #final_shap[k] =v*shap_scaling  
-                final_shap['Shap_Base_Effect'] = base_shap_effect
+                for k, v in shap_dict.items():
+                    final_shap = {f"SHAP_{k}": float(np.asarray(v).squeeze())*shap_scaling for k, v in shap_dict.items()}
+                    final_shap["Shap_Base_Effect"] = float(base_shap_effect)
                 #calc CRPS
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 #bvar gives draws so we calc quantiles for the fit

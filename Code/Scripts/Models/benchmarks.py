@@ -135,11 +135,13 @@ def run_experiment():
                     current_idx+=retrain_step_months   #skip this window
                     continue
 
-                #forecast1 step ahead (=h-month ahead)
-                forecasts=model_res.forecast(horizon=1, reindex=False)
-                #extract mean and var
-                mu_pred=forecasts.mean.iloc[0, 0]
-                sigma_pred=np.sqrt(forecasts.variance.iloc[0, 0])
+                #take the h-step ahead forecast (last column)
+                forecasts = model_res.forecast(horizon=1, start=len(y_train)-1, reindex=False)
+                #extract mean and var                
+                mu_pred = float(forecasts.mean.iloc[-1, -1])
+                sigma_pred = float(np.sqrt(forecasts.variance.iloc[-1, -1]))
+
+
                 #extract skew-t parameters from GARCH fit
                 dist_params= model_res.params.iloc[-2:]
                 
@@ -168,7 +170,7 @@ def run_experiment():
                     #de-annualize parameters for mean and volatility
                     scaling_factor=h/12
                     mu_yoy=base_effect+(mu_pred*scaling_factor) #reconstruct mean
-                    sigma_yoy = sigma_pred *scaling_factor#scale only forecasted components volatility
+                    sigma_yoy = sigma_pred * np.sqrt(scaling_factor)#scale only forecasted components volatility
                 #ask model how many params needed
                 n_shape_params= model_res.model.distribution.num_params
                 #extract correct dist params
