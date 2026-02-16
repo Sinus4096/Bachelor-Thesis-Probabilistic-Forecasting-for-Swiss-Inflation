@@ -84,6 +84,29 @@ def run_experiment(config):
         months_since_last_tune=0
         tune_frequency = 36
         #recursive forecasting loop (do with direct forecasting)
+        if use_pca_factors:
+            # 1. Store the targets separately before they get lost
+            targets_train = df_train[available_targets].copy()
+            targets_test  = X_test[available_targets].copy()               
+            # 2. Decide PCA block vs kept columns
+            pca_cols, keep_cols = get_pca(df_columns=df_system.columns, 
+                                         target_cols_to_drop=current_target_cols, 
+                                         target_name=target_names[1], 
+                                         config=config)
+                
+            # 3. Fit PCA (This returns only features + factors)
+            df_train, X_test, pca_info = make_factor_features_time_safe(
+                X_train=df_train, X_test=X_test, 
+                pca_cols=pca_cols, keep_cols=keep_cols,
+                config=config, forecast_date=forecast_date, 
+                target_name=target_names[1], h=h, top_k=5
+            )
+
+            # 4. RE-ATTACH TARGETS HERE
+            df_train = pd.concat([targets_train, df_train], axis=1)
+            X_test   = pd.concat([targets_test,  X_test], axis=1)
+            #enforce identical column order between train and test
+            X_test = X_test.reindex(columns=df_train.columns)
         while current_idx< total_rows:
             #get date
             forecast_date= df_system.index[current_idx]
@@ -107,29 +130,7 @@ def run_experiment(config):
             df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=available_targets)
             X_test = df_system.iloc[current_idx - lags : current_idx + 1]
             
-            if use_pca_factors:
-                # 1. Store the targets separately before they get lost
-                targets_train = df_train[available_targets].copy()
-                targets_test  = X_test[available_targets].copy()               
-                # 2. Decide PCA block vs kept columns
-                pca_cols, keep_cols = get_pca(df_columns=df_system.columns, 
-                                             target_cols_to_drop=current_target_cols, 
-                                             target_name=target_names[1], 
-                                             config=config)
-                
-                # 3. Fit PCA (This returns only features + factors)
-                df_train, X_test, pca_info = make_factor_features_time_safe(
-                    X_train=df_train, X_test=X_test, 
-                    pca_cols=pca_cols, keep_cols=keep_cols,
-                    config=config, forecast_date=forecast_date, 
-                    target_name=target_names[1], h=h, top_k=5
-                )
 
-                # 4. RE-ATTACH TARGETS HERE
-                df_train = pd.concat([targets_train, df_train], axis=1)
-                X_test   = pd.concat([targets_test,  X_test], axis=1)
-                #enforce identical column order between train and test
-                X_test = X_test.reindex(columns=df_train.columns)
                 
             #determine if need to retune
             should_tune=False
@@ -185,7 +186,7 @@ def run_experiment(config):
                 if h==12:
                     preds_draws_yoy=preds_draws
                     #shapley scaling: standard deviation
-                    shap_scaling = 0
+                    shap_scaling = 1.0
                     base_shap_effect=0 #since we are forecasting the change from t-12 to t, the base effect is 0 (no change) and the shapley values show how much each feature contributes to deviating from this base effect
                 else:
                     #for h<12: combine history with deannualized model predictions

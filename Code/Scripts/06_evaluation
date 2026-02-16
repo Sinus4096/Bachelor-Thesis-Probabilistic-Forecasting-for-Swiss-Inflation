@@ -24,7 +24,7 @@ crps_col = "Parametric_CRPS"    # or "Empirical_CRPS"
 
 # EXACTLY 3 models (used as columns in grids)
 # Matching rule: model key must appear in filename (case-insensitive, non-alnum ignored)
-models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical","QRF_Default"]
+models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical","QRF_Default_Lin_Feat_PCA"]
 
 # If you want to restrict to specific subfolders under Results, set to [] to scan everything.
 results_subfolder: List[str] = []
