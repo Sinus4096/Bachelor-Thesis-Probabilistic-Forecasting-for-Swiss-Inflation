@@ -19,32 +19,86 @@ def crps_from_samples(y, samples):
     term2 =0.5*np.mean(np.abs(s[:, None]-s[None, :]))
     return float(term1 - term2)
 
-def rolling_crps_score(data, target_col=None, target_idx=0, horizon=12, prior_type="natural_niw", prior_params=None, fixed_lambda=0.02, start_eval=60,
-    step=1, n_draws=600, burn_in=150, y_is_preshifted=False):
-    # auto-detect target column if not provided
+def rolling_crps_score(data, target_col=None, target_idx=0, horizon=12, 
+                       prior_type="natural_niw", prior_params=None, 
+                       fixed_lambda=0.02, start_eval=60,
+                       step=1, n_draws=600, burn_in=150, y_is_preshifted=True):
+    
+    # Auto-detect target column
     if target_col is None:
         target_cols = [c for c in data.columns if "target_" in c]
-        if len(target_cols) != 1:
-            raise ValueError(f"target_col not provided and found {len(target_cols)} target_ columns.")
+        if not target_cols:
+            raise ValueError("No target column found.")
         target_col = target_cols[0]
 
     T = len(data)
     scores = []
-    last_origin = T if y_is_preshifted else (T - horizon)
+    
+    # We can only evaluate if we have the actual outcome. 
+    # In pre-shifted data, row T-1 contains the target for time T-1+h. 
+    # Usually, we stop iterating when we run out of data.
+    last_origin = T 
 
     for t in range(start_eval, last_origin, step):
-        train = data.iloc[:t].copy()
-        y_true = data.iloc[t][target_col] if y_is_preshifted else data.iloc[t + horizon][target_col]
+        
+        # --- 1. Get the Ground Truth ---
+        # The actual value for this row
+        y_true = data.iloc[t][target_col]
+        
+        # Skip if y_true is missing (can happen at tail ends of data)
+        if pd.isna(y_true):
+            continue
 
-        # Fit with fixed lambda (NO tuning inside the loop)
+        # --- 2. Define Training Data ---
+        # We know the outcome Y_t (located at row t-h).
+        # We do NOT know Y_{t+h} (located at row t).
+        train_end_idx = t - horizon
+        
+        # Safety check: need enough history to train
+        if train_end_idx < 15: 
+            continue
+            
+        df_train = data.iloc[:train_end_idx+1].copy()
+
+        # --- 3. Define Forecast Input ---
+        # We need the feature row at 't' to predict 't'.
+        df_forecast = data.iloc[:t+1].copy()
+        
+        # --- CRITICAL FIX ---
+        # 1. Identify where the target column is
+        col_idx = df_forecast.columns.get_loc(target_col)
+        
+        # 2. Get the most recent KNOWN target value (from t-h)
+        # This represents y_t in the equation y_{t+h} = f(y_t)
+        most_recent_known_value = data.iloc[t - horizon][target_col]
+        
+        # 3. Overwrite the future value (y_{t+h}) with the known value (y_t)
+        # inside the input matrix. This removes leakage AND gives the model a valid number.
+        df_forecast.iloc[-1, col_idx] = most_recent_known_value
+
+        # --- 4. Fit and Forecast ---
+        # Fit model
         b = BVAR(lags=2, prior_type=prior_type, prior_params=prior_params)
-        b.fit(train, horizon=horizon, n_draws=n_draws, burn_in=burn_in, fixed_lambda=fixed_lambda)
+        b.fit(df_train, horizon=horizon, n_draws=n_draws, burn_in=burn_in, fixed_lambda=fixed_lambda)
 
-        draws = b.forecast(train)[:, target_idx]
-        scores.append(crps_from_samples(y_true, draws))
+        # Forecast
+        all_preds = b.forecast(df_forecast)
+        
+        # Extract predictions for the target variable
+        # Note: If forecast returns (draws, n_vars), we take the column for target
+        draws = all_preds[:, target_idx]
+        
+        # Calculate score
+        score = crps_from_samples(y_true, draws)
+        
+        # Only append if valid number
+        if not np.isnan(score):
+            scores.append(score)
 
-    return float(np.nanmean(scores))
+    if not scores:
+        return np.nan
 
+    return float(np.mean(scores))
 
 
 
@@ -402,10 +456,14 @@ class BVAR:
                     #get K and exog vars to adjust grid depending on features
                     K=self.n_features
                     exog=self.n_exog
-
-                    lambda_grid = [0.005, 0.01, 0.02, 0.04, 0.1]
-                    theta_grid= [0.01,0.02, 0.03, 0.1, 0.3]
-                    decay_grid = [1.0, 1.5, 2.0]
+                    if horizon ==12 or horizon ==9:
+                        lambda_grid = [0.05, 0.07, 0.09, 0.1, 0.2, 0.3]
+                        theta_grid= [0.05, 0.1, 0.3, 0.5]
+                        decay_grid = [1.0, 1.5, 2.0]
+                    else:
+                        lambda_grid = [0.01, 0.03, 0.05, 0.07, 0.1]
+                        theta_grid= [0.01, 0.03, 0.05, 0.1]
+                        decay_grid = [1.0, 1.5, 2.0]
                     start_eval = max(horizon + 24, int(0.6*len(data)))
                     step_tune = 4
                     n_draws_tune = 150
@@ -726,10 +784,18 @@ class BVAR:
         n_obs= X_raw.shape[0] #number of observations in the input data
         #extract current values and lags
         for lag in self.lag_indices:
-            #need to shift back the y values to not leak data for lags
-            idx_y = n_obs - (lag + self.h) - 1
-            idx= n_obs- lag-1   #index to extract the correct lagged value
-            lags.append(Y_raw[idx_y, :])  #first target to match order of lag creation
+            # During forecast, we are at time T and want to predict T+h.
+            # We use predictors available at T (Lag 0 = T, Lag 1 = T-1).
+            # We do NOT shift back by 'h' (that is only for training alignment).
+            
+            idx_y = n_obs - lag - 1  
+            idx = n_obs - lag - 1    
+            
+            # Safety check to ensure indices aren't negative
+            if idx_y < 0 or idx < 0:
+                 raise ValueError("Not enough data in X_test to create lags for forecast.")
+                 
+            lags.append(Y_raw[idx_y, :]) 
             lags.append(X_raw[idx, :])
         #combine into 1 horizontal vector
         X_combined=np.concatenate(lags)

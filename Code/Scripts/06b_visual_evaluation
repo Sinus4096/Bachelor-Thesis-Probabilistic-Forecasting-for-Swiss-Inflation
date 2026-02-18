@@ -311,30 +311,45 @@ def find_factor_summary_file(results_dir: Path, model_key: str) -> Path:
         )
     return best
 
-
 def load_pca_weights(path: Path) -> pd.DataFrame:
     """
-    Must contain: Date, Target, Horizon, Factor, Variable, Weight
+    Accepts either:
+      - headered CSV with columns: Date,Target,Horizon,Factor,Variable,Weight
+      - or headerless CSV with exactly 6 columns in that order
     """
     w = pd.read_csv(path)
+
+    # Headerless file -> force your exact schema
+    if len(w.columns) == 6 and all(str(c).isdigit() for c in w.columns):
+        w = pd.read_csv(
+            path,
+            header=None,
+            names=["Date", "Target", "Horizon", "Factor", "Variable", "Weight"],
+        )
+
     needed = {"Date", "Target", "Horizon", "Factor", "Variable", "Weight"}
     miss = needed - set(w.columns)
     if miss:
-        raise ValueError(f"{path} missing columns: {sorted(miss)}")
+        raise ValueError(f"{path} missing columns: {sorted(miss)}; found {list(w.columns)}")
 
     w["Date"] = pd.to_datetime(w["Date"], errors="coerce")
-    w["Horizon"] = pd.to_numeric(w["Horizon"], errors="coerce")
+    w["Horizon"] = pd.to_numeric(w["Horizon"], errors="coerce").astype(int)
     w["Weight"] = pd.to_numeric(w["Weight"], errors="coerce")
-    w = w.dropna(subset=["Date", "Target", "Horizon", "Factor", "Variable", "Weight"])
 
-    # normalize Factor names a bit if needed
+    w["Target"] = w["Target"].astype(str)
     w["Factor"] = w["Factor"].astype(str)
+    w["Variable"] = w["Variable"].astype(str)
 
+    w = w.dropna(subset=["Date", "Target", "Horizon", "Factor", "Variable", "Weight"])
     return w
 
+PCA_FACTOR_RE = re.compile(r"^Shap_(Factor_\d+)$", re.IGNORECASE)
+
+
 def is_pca_shap_df(df: pd.DataFrame) -> bool:
-    # detect presence of any Shap_Factor_* columns
+    """True if dataframe contains Shap_Factor_k columns."""
     return any(PCA_FACTOR_RE.match(c) for c in df.columns)
+
 
 def project_factor_shap_to_variables(
     df: pd.DataFrame,
@@ -343,86 +358,82 @@ def project_factor_shap_to_variables(
     horizon: int,
 ) -> pd.DataFrame:
     """
-    If df contains Shap_Factor_* columns, create implied Shap_<Variable> columns:
-      Shap_var = sum_k Shap_Factor_k * Weight(Factor_k,var) for each origin Date.
-    Leaves original SHAP columns untouched (you can drop later if you want).
+    Convert Shap_Factor_k → Shap_<Variable> using PCA loadings.
+    Uses your weights file schema:
+    Date,Target,Horizon,Factor,Variable,Weight
     """
+
     if df is None or "Date" not in df.columns:
         return df
 
-    # factor shap columns present in this df
+    # ---- find factor shap columns
     factor_cols = []
     factor_names = []
     for c in df.columns:
         m = PCA_FACTOR_RE.match(c)
         if m:
             factor_cols.append(c)
-            factor_names.append(m.group(1))  # Factor_1 ...
+            factor_names.append(m.group(1))
 
     if not factor_cols:
         return df
 
-    # weights filtered to this target/horizon
-    w = pca_w[(pca_w["Target"].str.lower() == target.lower()) & (pca_w["Horizon"] == horizon)].copy()
+    # ---- filter weights for this target/horizon
+    w = pca_w[
+        (pca_w["Target"].str.lower() == target.lower())
+        & (pca_w["Horizon"] == horizon)
+    ].copy()
+
     if w.empty:
-        # no weights -> can't project
         return df
 
-    # keep only factors used in this model output
     w = w[w["Factor"].isin(factor_names)]
     if w.empty:
         return df
 
-    # pivot weights per origin Date: (Date, Variable) columns by Factor
-    # We'll build a dict: date -> (F x V) matrix as DataFrame indexed by Factor, columns Variable
-    # (works even if weights change by Date)
+    # pivot → (Date,Factor) x Variable
     w_piv = (
-        w.pivot_table(index=["Date","Factor"], columns="Variable", values="Weight", aggfunc="mean")
-         .sort_index()
+        w.pivot_table(
+            index=["Date", "Factor"],
+            columns="Variable",
+            values="Weight",
+            aggfunc="mean",
+        )
+        .sort_index()
     )
 
     origin_dates = pd.to_datetime(df["Date"], errors="coerce")
     out = df.copy()
 
-    # For speed: precompute list of variables present in weights
     variables = list(w_piv.columns)
 
-    # Initialize projected SHAP columns to 0.0
+    # create columns
     for var in variables:
         col = f"Shap_{var}"
         if col not in out.columns:
             out[col] = 0.0
 
-    # Row-wise projection (robust to varying weights over time)
-    # If you have tons of rows, you can vectorize later; this is the clearest drop-in.
-    for idx, d in enumerate(origin_dates):
+    # rowwise projection
+    for i, d in enumerate(origin_dates):
         if pd.isna(d):
             continue
 
-        # weights for this origin date
         try:
-            w_d = w_piv.loc[d]  # index: Factor, columns: Variable
+            w_d = w_piv.loc[d]
         except KeyError:
             continue
 
-        # align factor ordering
         w_d = w_d.reindex(index=factor_names)
-        if w_d.isna().all().all():
-            continue
 
-        # factor shap values for this row
-        sf = pd.to_numeric(out.iloc[idx][factor_cols], errors="coerce").values.astype(float)
-
-        # if any factor missing, treat as 0
+        sf = pd.to_numeric(out.iloc[i][factor_cols], errors="coerce").values
         sf = np.nan_to_num(sf, nan=0.0)
 
-        # projected variable shap: sf (1xF) dot W (F x V) -> (V,)
         W = np.nan_to_num(w_d.values, nan=0.0)
-        proj = sf @ W  # shape (V,)
 
-        # add to columns
+        proj = sf @ W
+
         for j, var in enumerate(variables):
-            out.iat[idx, out.columns.get_loc(f"Shap_{var}")] = proj[j]
+            out.iat[i, out.columns.get_loc(f"Shap_{var}")] = proj[j]
 
     return out
 
@@ -493,6 +504,12 @@ def main() -> None:
     for meta in found:
         try:
             df = load_forecast(meta.path, actuals)
+
+            w = pca_weights_by_model.get(meta.model_key)
+            if w is not None and is_pca_shap_df(df):
+                # your weights use Target = "Headline"/"Core"
+                df = project_factor_shap_to_variables(df, w, target=meta.variable, horizon=meta.horizon)
+
             data[meta.model_key][meta.horizon] = df
         except Exception as e:
             errors.append((meta.path, str(e)))
@@ -757,7 +774,59 @@ def main() -> None:
     if w is not None and is_pca_shap_df(df):
         df = project_factor_shap_to_variables(df, w, target=data_type, horizon=h)
 
-    shap_vars = ["Euribor", "Unemployment", "InflExp"]  # change to your real feature names
+    # choose scatter vars from YOUR PCA weight file (top abs loadings)
+    def pick_scatter_vars_from_weights(w: pd.DataFrame, target: str, horizon: int, top_n: int = 6) -> list[str]:
+        ww = w[(w["Target"].str.lower() == target.lower()) & (w["Horizon"] == horizon)].copy()
+        if ww.empty:
+            return []
+        # pick variables that matter most across factors
+        s = ww.groupby("Variable")["Weight"].apply(lambda x: np.mean(np.abs(x))).sort_values(ascending=False)
+        return list(s.head(top_n).index)
+
+    for h in horizons:
+        for model in models_compare:
+            df = data.get(model, {}).get(h)
+            if df is None:
+                continue
+
+            if X is None or "Date" not in df.columns:
+                continue
+
+            # if this is a PCA model and we loaded weights, pick YOUR variable names
+            w = pca_weights_by_model.get(model)
+            if w is not None:
+                shap_vars = pick_scatter_vars_from_weights(w, target=data_type, horizon=h, top_n=6)
+            else:
+                # non-PCA: just use whatever SHAP cols exist (YOUR names)
+                shap_vars = [shap_suffix(c) for c in shap_columns(df)][:6]
+
+            origin_dates = pd.to_datetime(df["Date"], errors="coerce")
+
+            for var in shap_vars:
+                shap_col = f"Shap_{var}"
+                if shap_col not in df.columns:
+                    continue
+                if X is None or var not in X.columns:
+                    continue
+
+                shap_v = pd.to_numeric(df[shap_col], errors="coerce")
+                x_v = origin_dates.map(X[var])
+
+                tmp = pd.DataFrame({"x": pd.to_numeric(x_v, errors="coerce"), "shap": shap_v},
+                                index=origin_dates).dropna()
+                if len(tmp) < 30:
+                    continue
+
+                plt.figure(figsize=(9, 6))
+                plt.scatter(tmp["x"], tmp["shap"], alpha=0.6)
+                plt.axhline(0.0, linewidth=1.2)
+                plt.title(f"SHAP vs X – {data_type} – {model} – h={h}m – {var}", fontweight="bold")
+                plt.xlabel(f"{var} (stationary, at origin)")
+                plt.ylabel(f"SHAP({var})")
+                plt.grid(True, alpha=0.25)
+                plt.tight_layout()
+                plt.show()
+
 
     if X is None:
         print("[WARN] Skipping SHAP scatters (no stationary features loaded).")
