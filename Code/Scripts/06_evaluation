@@ -17,7 +17,7 @@ from scipy.stats import nct
 # CONFIG (only edit these)
 # ============================================================
 #what to compare
-data_type= "Headline"   #plot core or headline in comparison
+data_type= "Core"   #plot core or headline in comparison
 horizons = [3, 6, 9, 12]     #comparison at all horizons ahead
 rolling_window =36   #36= ca 3 years for monthly data
 crps_col = "Parametric_CRPS"    # or "Empirical_CRPS"
@@ -79,7 +79,13 @@ shap_heatmap_value = "abs"     # "abs" for |shap|, or "raw" for signed shap
 tailrisk_rolling = 12  # months for smoothing; set 1 for none
 
 # -----------------------------
-   
+   # ============================================================
+# PCA->Variable backprojection (loadings)
+# ============================================================
+# CSV with columns: Date,Target,Horizon,Factor,Variable,Weight
+pca_weights_filename_hint = "pca"   # any substring to help auto-find
+pca_model_hint = "pca"              # identify PCA models by name OR by shap cols
+
 
 HORIZON_RE = re.compile(r"(?<!\d)(\d{1,2})m(?!\d)", re.IGNORECASE)
 
@@ -266,6 +272,159 @@ def load_forecast(path: Path, actuals: pd.Series) -> pd.DataFrame:
     # index by Target_date for evaluation plots
     df = df.set_index("Target_date").sort_index()
     return df
+PCA_FACTOR_RE = re.compile(r"^Shap_(Factor_\d+)$", re.IGNORECASE)
+
+def find_factor_summary_file(results_dir: Path, model_key: str) -> Path:
+    """
+    Find the best-matching Factor_Summary_*.csv for a given model key inside:
+      Code/Results/Factor_Summaries/
+    Matching uses your normalize() logic.
+    """
+    fs_dir = results_dir / "Factor_Summaries"
+    if not fs_dir.exists():
+        raise FileNotFoundError(f"Factor_Summaries folder not found: {fs_dir}")
+
+    files = list(fs_dir.glob("*.csv"))
+    if not files:
+        raise FileNotFoundError(f"No CSV files found in: {fs_dir}")
+
+    nkey = normalize(model_key)
+
+    best = None
+    best_score = -1
+    for p in files:
+        npn = normalize(p.name)
+        # score by overlap length of normalized model name in filename
+        if nkey and nkey in npn:
+            score = len(nkey)
+        else:
+            # fallback: partial overlap if needed
+            score = 0
+        if score > best_score:
+            best_score = score
+            best = p
+
+    if best is None or best_score <= 0:
+        raise FileNotFoundError(
+            f"Could not match a Factor_Summary file for model '{model_key}' in {fs_dir}. "
+            f"Available: {[f.name for f in files]}"
+        )
+    return best
+
+
+def load_pca_weights(path: Path) -> pd.DataFrame:
+    """
+    Must contain: Date, Target, Horizon, Factor, Variable, Weight
+    """
+    w = pd.read_csv(path)
+    needed = {"Date", "Target", "Horizon", "Factor", "Variable", "Weight"}
+    miss = needed - set(w.columns)
+    if miss:
+        raise ValueError(f"{path} missing columns: {sorted(miss)}")
+
+    w["Date"] = pd.to_datetime(w["Date"], errors="coerce")
+    w["Horizon"] = pd.to_numeric(w["Horizon"], errors="coerce")
+    w["Weight"] = pd.to_numeric(w["Weight"], errors="coerce")
+    w = w.dropna(subset=["Date", "Target", "Horizon", "Factor", "Variable", "Weight"])
+
+    # normalize Factor names a bit if needed
+    w["Factor"] = w["Factor"].astype(str)
+
+    return w
+
+def is_pca_shap_df(df: pd.DataFrame) -> bool:
+    # detect presence of any Shap_Factor_* columns
+    return any(PCA_FACTOR_RE.match(c) for c in df.columns)
+
+def project_factor_shap_to_variables(
+    df: pd.DataFrame,
+    pca_w: pd.DataFrame,
+    target: str,
+    horizon: int,
+) -> pd.DataFrame:
+    """
+    If df contains Shap_Factor_* columns, create implied Shap_<Variable> columns:
+      Shap_var = sum_k Shap_Factor_k * Weight(Factor_k,var) for each origin Date.
+    Leaves original SHAP columns untouched (you can drop later if you want).
+    """
+    if df is None or "Date" not in df.columns:
+        return df
+
+    # factor shap columns present in this df
+    factor_cols = []
+    factor_names = []
+    for c in df.columns:
+        m = PCA_FACTOR_RE.match(c)
+        if m:
+            factor_cols.append(c)
+            factor_names.append(m.group(1))  # Factor_1 ...
+
+    if not factor_cols:
+        return df
+
+    # weights filtered to this target/horizon
+    w = pca_w[(pca_w["Target"].str.lower() == target.lower()) & (pca_w["Horizon"] == horizon)].copy()
+    if w.empty:
+        # no weights -> can't project
+        return df
+
+    # keep only factors used in this model output
+    w = w[w["Factor"].isin(factor_names)]
+    if w.empty:
+        return df
+
+    # pivot weights per origin Date: (Date, Variable) columns by Factor
+    # We'll build a dict: date -> (F x V) matrix as DataFrame indexed by Factor, columns Variable
+    # (works even if weights change by Date)
+    w_piv = (
+        w.pivot_table(index=["Date","Factor"], columns="Variable", values="Weight", aggfunc="mean")
+         .sort_index()
+    )
+
+    origin_dates = pd.to_datetime(df["Date"], errors="coerce")
+    out = df.copy()
+
+    # For speed: precompute list of variables present in weights
+    variables = list(w_piv.columns)
+
+    # Initialize projected SHAP columns to 0.0
+    for var in variables:
+        col = f"Shap_{var}"
+        if col not in out.columns:
+            out[col] = 0.0
+
+    # Row-wise projection (robust to varying weights over time)
+    # If you have tons of rows, you can vectorize later; this is the clearest drop-in.
+    for idx, d in enumerate(origin_dates):
+        if pd.isna(d):
+            continue
+
+        # weights for this origin date
+        try:
+            w_d = w_piv.loc[d]  # index: Factor, columns: Variable
+        except KeyError:
+            continue
+
+        # align factor ordering
+        w_d = w_d.reindex(index=factor_names)
+        if w_d.isna().all().all():
+            continue
+
+        # factor shap values for this row
+        sf = pd.to_numeric(out.iloc[idx][factor_cols], errors="coerce").values.astype(float)
+
+        # if any factor missing, treat as 0
+        sf = np.nan_to_num(sf, nan=0.0)
+
+        # projected variable shap: sf (1xF) dot W (F x V) -> (V,)
+        W = np.nan_to_num(w_d.values, nan=0.0)
+        proj = sf @ W  # shape (V,)
+
+        # add to columns
+        for j, var in enumerate(variables):
+            out.iat[idx, out.columns.get_loc(f"Shap_{var}")] = proj[j]
+
+    return out
 
 
 # ============================================================
@@ -346,6 +505,20 @@ def main() -> None:
         print("\n[WARN] Some files failed to load (showing up to 15):")
         for p, msg in errors[:15]:
             print(f"  - {p}: {msg}")
+            
+        # Load PCA weights (optional)
+        # Load PCA factor summaries per model (only for PCA models)
+    pca_weights_by_model = {}
+    for model in models_compare:
+        if "pca" not in model.lower():
+            continue
+        try:
+            w_path = find_factor_summary_file(results_dir, model)
+            pca_weights_by_model[model] = load_pca_weights(w_path)
+            print(f"[INFO] Loaded PCA weights for {model}: {w_path}")
+        except Exception as e:
+            print(f"[WARN] Could not load PCA weights for {model}: {e}")
+
 
     # -----------------------------
     # 1) PIT CALIBRATION GRID
@@ -577,10 +750,14 @@ def main() -> None:
     else:
         print("[WARN] Skipping density plot (missing Date column or missing data).")
     
-     # 6) SHAP SCATTERS / FUNCTIONAL FORM
+        # -----------------------------
+    # 6) SHAP SCATTERS / FUNCTIONAL FORM
     # -----------------------------
-    # Requires: Shap_<var> columns in result CSVs + X[var] in data_stationary.csv (indexed by origin Date)
-    shap_vars = ["Euribor", "Unemployment", "InflExp"]  # <-- change to your actual variable names
+    w = pca_weights_by_model.get(model)
+    if w is not None and is_pca_shap_df(df):
+        df = project_factor_shap_to_variables(df, w, target=data_type, horizon=h)
+
+    shap_vars = ["Euribor", "Unemployment", "InflExp"]  # change to your real feature names
 
     if X is None:
         print("[WARN] Skipping SHAP scatters (no stationary features loaded).")
@@ -591,12 +768,12 @@ def main() -> None:
                 if df is None:
                     continue
 
-                s_cols = shap_columns(df)
-                if not s_cols:
-                    continue
+                # Project factor SHAP -> variable SHAP if this is a PCA model and weights exist
+                w = pca_weights_by_model.get(model)
+                if w is not None and is_pca_shap_df(df):
+                    df = project_factor_shap_to_variables(df, w, target=data_type, horizon=h)
 
                 if "Date" not in df.columns:
-                    print(f"[INFO] Skipping SHAP scatters for {model}, h={h} (missing Date/origin).")
                     continue
 
                 origin_dates = pd.to_datetime(df["Date"], errors="coerce")
@@ -606,14 +783,12 @@ def main() -> None:
                 for var in shap_vars:
                     shap_col = f"Shap_{var}"
                     if shap_col not in df.columns:
-                        # Not all models/horizons have all SHAP cols
                         continue
                     if var not in X.columns:
-                        print(f"[INFO] Var '{var}' not found in stationary features. Skipping.")
                         continue
 
                     shap_v = pd.to_numeric(df[shap_col], errors="coerce")
-                    x_v = origin_dates.map(X[var])  # align predictor by origin Date
+                    x_v = origin_dates.map(X[var])
 
                     tmp = pd.DataFrame(
                         {"x": pd.to_numeric(x_v, errors="coerce"), "shap": shap_v},
@@ -626,15 +801,13 @@ def main() -> None:
                     plt.figure(figsize=(9, 6))
                     plt.scatter(tmp["x"], tmp["shap"], alpha=0.6)
                     plt.axhline(0.0, linewidth=1.2)
-                    plt.title(
-                        f"Functional Form (SHAP vs X) – {data_type} – {model} – h={h}m – {var}",
-                        fontweight="bold"
-                    )
-                    plt.xlabel(f"{var} (stationary feature at origin)")
-                    plt.ylabel(f"SHAP({var}) contribution")
+                    plt.title(f"SHAP vs X – {data_type} – {model} – h={h}m – {var}", fontweight="bold")
+                    plt.xlabel(f"{var} (stationary, at origin)")
+                    plt.ylabel(f"SHAP({var})")
                     plt.grid(True, alpha=0.25)
                     plt.tight_layout()
                     plt.show()
+
 # -----------------------------
     # 8) SKEWNESS & TAIL RISK CHARTS (alpha and nu proxies)
     # -----------------------------

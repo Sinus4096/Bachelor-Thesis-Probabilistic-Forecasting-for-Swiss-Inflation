@@ -60,128 +60,205 @@ def run_experiment(config):
     use_pca_factors = bool(config.get("model", {}).get("use_pca_factors", False))
     
     #iterate to get right target col
+# ... inside run_experiment ...
+
+    # 1. Loop Horizons
     for h in horizons:
-        current_target_cols=[f"target_{var.lower()}_{h}m" for var in target_names]
-        #check if all target cols exist
-        available_targets = [t for t in current_target_cols if t in df.columns]
-        if not available_targets:
-            continue
-        #create system for this horizon
-        df_system=df[available_targets + predictor_cols].copy()
-        total_rows= len(df_system)  #total rows in data
-        requested_start_idx = df_system.index.get_loc(eval_start_date)     #get index of start date
-
-        if isinstance(requested_start_idx, slice):
-            requested_start_idx= requested_start_idx.start    #get integer index if slice
-        start_idx = max(requested_start_idx, training_offset)
-        #initialize for recursive predictions
-        current_idx= start_idx
-        #initialize dictionary where keys are target names and values are empty lists
-        results_storage={target: [] for target in target_names}
-        #initialize var to store tuned params
-        tuned_params=None 
-        #counter when to re-tune (every 3 years)
-        months_since_last_tune=0
-        tune_frequency = 36
-        #recursive forecasting loop (do with direct forecasting)
-        if use_pca_factors:
-            # 1. Store the targets separately before they get lost
-            targets_train = df_train[available_targets].copy()
-            targets_test  = X_test[available_targets].copy()               
-            # 2. Decide PCA block vs kept columns
-            pca_cols, keep_cols = get_pca(df_columns=df_system.columns, 
-                                         target_cols_to_drop=current_target_cols, 
-                                         target_name=target_names[1], 
-                                         config=config)
-                
-            # 3. Fit PCA (This returns only features + factors)
-            df_train, X_test, pca_info = make_factor_features_time_safe(
-                X_train=df_train, X_test=X_test, 
-                pca_cols=pca_cols, keep_cols=keep_cols,
-                config=config, forecast_date=forecast_date, 
-                target_name=target_names[1], h=h, top_k=5
-            )
-
-            # 4. RE-ATTACH TARGETS HERE
-            df_train = pd.concat([targets_train, df_train], axis=1)
-            X_test   = pd.concat([targets_test,  X_test], axis=1)
-            #enforce identical column order between train and test
-            X_test = X_test.reindex(columns=df_train.columns)
-        while current_idx< total_rows:
-            #get date
-            forecast_date= df_system.index[current_idx]
-            target_date=forecast_date+pd.DateOffset(months=h)
-            #skip if not a training and forecasting month 
-            if forecast_date.month not in snb_months:
-                current_idx+= 1
-                months_since_last_tune += 1  #want to check monthly
-                continue          
-
-            #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
-            if target_date not in df_yoy.index:
-                current_idx+= 1
-                continue
-            #targets only know if they finished before forecast date
-            train_end_idx= current_idx-h
-            if train_end_idx< lags: # Need enough data for lags
-                current_idx+= 1
-                continue
-            #prepare training data up to current idx 
-            df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=available_targets)
-            X_test = df_system.iloc[current_idx - lags : current_idx + 1]
+        
+        # 2. Loop Targets (Target-wise!)
+        for target_name in target_names:  # e.g., target_name = "Core"
             
+            # --- DEFINE VARIABLES ---
+            # The specific column string: "target_core_12m"
+            target_col_str = f"target_{target_name.lower()}_{h}m"
+            
+            # The list version (needed for pandas slicing and PCA dropping): ["target_core_12m"]
+            target_col_list = [target_col_str] 
+            
+            # --- FIX 1: Check existence using the STRING ---
+            if target_col_str not in df.columns:
+                print(f"Skipping {target_col_str} (not found)")
+                continue
 
+            # Identify ALL target columns in the entire dataframe to prevent leakage
+            # (We want to drop "target_headline" even when predicting "target_core")
+            all_target_cols_drop_list = [c for c in df.columns if 'target_' in c]
+
+            # Create system for this horizon
+            # We keep all predictors, plus the specific target we are predicting
+            df_system = df[target_col_list + predictor_cols].copy()
+            
+            total_rows = len(df_system)
+            requested_start_idx = df_system.index.get_loc(eval_start_date)
+            if isinstance(requested_start_idx, slice):
+                requested_start_idx = requested_start_idx.start
+            start_idx = max(requested_start_idx, training_offset)
+
+            pca_bundle = None
+            pca_cols, keep_cols = None, None
+
+            if use_pca_factors:
+                # --- FIX 2: PCA Setup ---
+                pca_cols, keep_cols = get_pca(
+                    df_columns=df_system.columns,
+                    # LIST: Drop all target columns from the features (X)
+                    target_cols_to_drop=all_target_cols_drop_list, 
+                    # STRING: Optimize correlations for THIS target only (Y)
+                    target_name=target_name, 
+                    config=config
+                )
+
+                initial_train_end = start_idx - h
                 
-            #determine if need to retune
-            should_tune=False
-            #if first run-> tune:
-            if tuned_params is None:
-                should_tune =True
-            #else every 3 years
-            elif months_since_last_tune>= tune_frequency:
-                should_tune=True 
-                months_since_last_tune = 0 #reset counter
-            #initialize params to tune -> not tune yet can use default
-            init_params= tuned_params if tuned_params else initial_prior_params
+                # Use the list for slicing (Pandas likes lists for .dropna subset)
+                df_train0 = df_system.iloc[training_offset: initial_train_end + 1].dropna(subset=target_col_list)
 
-            #initialize and fit BVAR model
-            model= BVAR(lags=lags, prior_type=prior_type, prior_params=init_params, implementation_type=implementation_type)
-            #retune every 3 years
-            if should_tune:
-                model.fit(df_train, horizon=h) #without fixed lambda
-                #save best params
-                tuned_params = model.params.copy()
-                months_since_last_tune =0   #reset counter
-            #else use lambda from last tuning
-            else:
-                if 'independent_niw' in prior_type:
-                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.2)))
+                required_rows = h + 2
+                start0 = initial_train_end - (required_rows - 1)
+
+                if start0 < 0:
+                    raise ValueError(f"Not enough history for initial PCA fit")
+
+                X_test0 = df_system.iloc[start0: initial_train_end + 1]
+
+                # Use list for slicing to keep it as a DataFrame
+                targets_train0 = df_train0[target_col_list].copy()
+                targets_test0  = X_test0[target_col_list].copy()
+
+                # Call factor function
+                X_train0_final, X_test0_final, pca_bundle = make_factor_features_time_safe(
+                    X_train=df_train0,
+                    X_test=X_test0,
+                    pca_cols=pca_cols,
+                    keep_cols=keep_cols,
+                    config=config,
+                    forecast_date=df_system.index[initial_train_end],
+                    target_name=target_name, # STRING: "Core"
+                    h=h,
+                    top_k=5,
+                    pca_bundle=None
+                )
+                
+                # ... continue with the loop ...
+
+                # reattach targets (so BVAR sees full system)
+                df_train0 = pd.concat([targets_train0, X_train0_final], axis=1)
+                X_test0   = pd.concat([targets_test0,  X_test0_final], axis=1)
+                X_test0   = X_test0.reindex(columns=df_train0.columns)
+
+            #initialize for recursive predictions
+            current_idx= start_idx
+            #initialize dictionary where keys are target names and values are empty lists
+            results_list = []
+            #initialize var to store tuned params
+            tuned_params=None 
+            #counter when to re-tune (every 3 years)
+            months_since_last_tune=0
+            tune_frequency = 36
+            #recursive forecasting loop (do with direct forecasting)
+
+            while current_idx< total_rows:
+                #get date
+                forecast_date= df_system.index[current_idx]
+                target_date=forecast_date+pd.DateOffset(months=h)
+                #skip if not a training and forecasting month 
+                if forecast_date.month not in snb_months:
+                    current_idx+= 1
+                    months_since_last_tune += 1  #want to check monthly
+                    continue          
+
+                #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
+                if target_date not in df_yoy.index:
+                    current_idx+= 1
+                    continue
+                #targets only know if they finished before forecast date
+                train_end_idx= current_idx-h
+                if train_end_idx< lags: # Need enough data for lags
+                    current_idx+= 1
+                    continue
+                #prepare training data up to current idx ??????????????????
+                df_train = df_system.iloc[training_offset: (current_idx-h)+1].dropna(subset=target_col_list)
+                # how many rows do we need so forecast() never uses negative idx_y?
+                required_rows = h +2   # = h + 2 because max lag index = 1
+
+                start = current_idx - (required_rows - 1)
+                X_test = df_system.iloc[start : current_idx + 1]
+
+                if use_pca_factors:
+                    targets_train = df_train[target_col_list].copy()
+                    targets_test  = X_test[target_col_list].copy()
+
+                    X_train_final, X_test_final, _ = make_factor_features_time_safe(
+                        X_train=df_train,
+                        X_test=X_test,
+                        pca_cols=pca_cols,
+                        keep_cols=keep_cols,
+                        config=config,
+                        forecast_date=forecast_date,
+                        target_name=target_name,  # <--- PASS SINGULAR STRING HERE
+                        h=h,
+                        top_k=5,
+                        pca_bundle=pca_bundle     # Reusing the bundle from initial setup
+                    )
+
+                    df_train = pd.concat([targets_train, X_train_final], axis=1)
+                    X_test   = pd.concat([targets_test,  X_test_final], axis=1)
+                    X_test   = X_test.reindex(columns=df_train.columns)
+
+
+                    
+                #determine if need to retune
+                should_tune=False
+                #if first run-> tune:
+                if tuned_params is None:
+                    should_tune =True
+                #else every 3 years
+                elif months_since_last_tune>= tune_frequency:
+                    should_tune=True 
+                    months_since_last_tune = 0 #reset counter
+                #initialize params to tune -> not tune yet can use default
+                init_params= tuned_params if tuned_params else initial_prior_params
+
+                #initialize and fit BVAR model
+                model= BVAR(lags=lags, prior_type=prior_type, prior_params=init_params, implementation_type=implementation_type)
+                #retune every 3 years
+                if should_tune:
+                    model.fit(df_train, horizon=h) #without fixed lambda
+                    #save best params
+                    tuned_params = model.params.copy()
+                    months_since_last_tune =0   #reset counter
+                #else use lambda from last tuning
                 else:
-                    model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
-                months_since_last_tune += 1
-            
-            #def test set and include enough previous obs for lags
-            if not use_pca_factors:
-               X_test =df_system.iloc[current_idx -lags:current_idx+1]
-            #forecast
-            preds_draws_all=model.forecast(X_test)
-            
-            #iterate through all target variables& extract results
-            for i, var_name in enumerate(target_names):
+                    if 'independent_niw' in prior_type:
+                        model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.2)))
+                    else:
+                        model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
+                    months_since_last_tune += 1
+                
+                #def test set and include enough previous obs for lags
+                if not use_pca_factors:
+                # how many rows do we need so forecast() never uses negative idx_y?
+                    required_rows = h + max([0, 1]) + 1   # = h + 2 because max lag index = 1
+
+                    start = current_idx - (required_rows - 1)
+                    X_test = df_system.iloc[start : current_idx + 1]
+
+                #forecast
+                preds_draws_all=model.forecast(X_test)
+                
+                
                 #preds draws made corresnponding to current target col
-                preds_draws=preds_draws_all[:, i]
-                #get name of target col
-                target_col_name=current_target_cols[i]
+                preds_draws=preds_draws_all[:, 0]
                 #get params for shaply
-                x_input_series, coeffs_dict, intercept= model.shapley_params(X_test, i)
+                x_input_series, coeffs_dict, intercept= model.shapley_params(X_test, 0)
 
                 #calc shapley values
                 shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
 
                 #get actual yoy value
-                actual_yoy=df_yoy.loc[target_date, var_name]
+                actual_yoy=df_yoy.loc[target_date, target_name]
                 #to calc price levels need levelsof core and headline cpi
-                raw_col= f"{var_name}_level"
+                raw_col= f"{target_name}_level"
                 #direct forecast evaluation: if h==12 can evaluate directly
                 if h==12:
                     preds_draws_yoy=preds_draws
@@ -194,6 +271,7 @@ def run_experiment(config):
                     history_date= forecast_date-pd.DateOffset(months=months_back)
 
                     if history_date not in df_yoy.index:
+                        current_idx+= 1 
                         continue  #skip if not enough history to deannualize
                     #calc log price levels
                     p_t= np.log(df_yoy.loc[forecast_date, raw_col])
@@ -206,11 +284,10 @@ def run_experiment(config):
                     shap_scaling= scaling_factor
                     base_shap_effect= base_effect  #the base effect is the deannualized change, and the shapley values show how much each feature contributes to deviating from this deannualized change
 
-                #rescale shapley values from standardized units to YoY units
-                final_shap={}                
-                for k, v in shap_dict.items():
-                    final_shap = {f"SHAP_{k}": float(np.asarray(v).squeeze())*shap_scaling for k, v in shap_dict.items()}
-                    final_shap["Shap_Base_Effect"] = float(base_shap_effect)
+                #rescale shapley values from standardized units to YoY units                
+                final_shap = {f"SHAP_{k}": float(np.asarray(v).squeeze()) * shap_scaling for k, v in shap_dict.items()}
+                final_shap["Shap_Base_Effect"] = float(base_shap_effect)
+
                 #calc CRPS
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 #bvar gives draws so we calc quantiles for the fit
@@ -227,27 +304,26 @@ def run_experiment(config):
                 #RMSE 
                 median= np.median(preds_draws_yoy) #get median forecast
                 rmse= calculate_rmse(actual_yoy, median)
-                
+                    
                 #store result to specific target list
                 results_entry=({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
                                                     'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
                                                     'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
                                                     'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
                                                     'scale_skewt': skew_params[3],'PIT': pit_value})
-                #add shapley values to results entry
+                 #add shapley values to results entry
                 results_entry.update(final_shap)                
-                results_storage[var_name].append(results_entry)
-            #advance window by 1 month
-            current_idx +=1
+                results_list.append(results_entry)
+                #advance window by 1 month
+                current_idx +=1
 
-                    
-        #save and evaluate final recursive results
-        for var_name in target_names:
-            results_df = pd.DataFrame(results_storage[var_name])
-            results_df.set_index('Date', inplace=True)
-                
-            save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{var_name}_{h}m.csv"
-            results_df.to_csv(save_name)
+                        
+            #save and evaluate final recursive results
+            results_df =pd.DataFrame(results_list)
+            if not results_df.empty:
+                results_df.set_index('Date', inplace=True)
+                save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{target_name}_{h}m.csv"
+                results_df.to_csv(save_name)
 
 if __name__ =="__main__":
     parser =argparse.ArgumentParser()

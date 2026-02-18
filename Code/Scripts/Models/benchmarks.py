@@ -69,7 +69,7 @@ def run_experiment():
     eval_start_dt = pd.Timestamp(eval_start_date)
 
     #use rolling window to capture structural breaks (set to minimum bc only 25 y data and dont want post covid era to depend on financial cirsis and peg era)
-    rolling_window_size=10*12 
+    rolling_window_size=7*12 
     #to match bvar start training date:
     training_offset =14
     #loop through targets and horizons to do recursive forecasts
@@ -101,7 +101,7 @@ def run_experiment():
             while current_idx<total_rows:
                 #identify dates now ->when forecast happens
                 forecast_date=df.index[current_idx]
-                #target date: date we're predicting????????????
+                #target date: date we're predictin
                 target_date= forecast_date+ pd.DateOffset(months=h)
                 #check whether is an SNB forecast month
                 if forecast_date.month not in snb_months:

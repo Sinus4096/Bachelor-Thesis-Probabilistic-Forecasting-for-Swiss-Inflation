@@ -13,10 +13,10 @@ def crps_from_samples(y, samples):
     Proper CRPS for an empirical predictive distribution
     """
     s = np.asarray(samples).ravel()
-    if s.size == 0 or np.isnan(y):
+    if s.size==0 or np.isnan(y):
         return np.nan
-    term1 = np.mean(np.abs(s - y))
-    term2 = 0.5 * np.mean(np.abs(s[:, None] - s[None, :]))
+    term1 =np.mean(np.abs(s -y))
+    term2 =0.5*np.mean(np.abs(s[:, None]-s[None, :]))
     return float(term1 - term2)
 
 def rolling_crps_score(data, target_col=None, target_idx=0, horizon=12, prior_type="natural_niw", prior_params=None, fixed_lambda=0.02, start_eval=60,
@@ -245,6 +245,7 @@ class BVAR:
                     lambda_grid=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]  #best lambda=a1=a2 (in accordance with natural niw characteristics)
                     decay_grid= [2.0, 4.0, 6.0]  #aggressive lag decay
                     theta_grid=[0.001, 0.003, 0.01, 0.03, 0.1] 
+                    
 
                     # Cheaper tuning settings
                     start_eval = max(horizon + 24, int(0.75 * len(data)))
