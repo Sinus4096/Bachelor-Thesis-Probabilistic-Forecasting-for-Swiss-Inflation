@@ -107,6 +107,40 @@ def run_experiment(config):
             months_since_last_tune=0
             tune_frequency = 36
             #recursive forecasting loop (do with direct forecasting)
+            pca_bundle_fixed = None
+
+            if use_pca_factors:
+                pub_lag = 2
+                pca_fit_end_date = eval_start_date - pd.DateOffset(months=pub_lag)
+
+                # build a clean predictor-only matrix up to pca_fit_end_date
+                df_pca_fit = df_system.loc[:pca_fit_end_date].copy()
+
+                cols_to_drop = [c for c in df_pca_fit.columns if 'target_' in c]
+                X_pca_fit = df_pca_fit.drop(columns=cols_to_drop).dropna()
+
+                # choose pca_cols/keep_cols once
+                pca_cols, keep_cols = get_pca(
+                    df_columns=X_pca_fit.columns,
+                    target_cols_to_drop=[],
+                    target_name=target_name,
+                    config=config
+                )
+
+                # fit PCA once by calling your helper with pca_bundle=None
+                # Use a dummy X_test (e.g., last row) just to trigger fitting
+                X_train_factors, X_test_factors, pca_bundle_fixed = make_factor_features_time_safe(
+                    X_train=X_pca_fit,
+                    X_test=X_pca_fit.tail(1),
+                    pca_cols=pca_cols,
+                    keep_cols=keep_cols,
+                    config=config,
+                    forecast_date=pca_fit_end_date,
+                    target_name=target_name,
+                    h=h,
+                    top_k=5,
+                    pca_bundle=None
+                )
 
             while current_idx< total_rows:
                 #get date
@@ -123,20 +157,24 @@ def run_experiment(config):
                     current_idx+= 1
                     continue
                 #targets only know if they finished before forecast date
-                train_end_idx= current_idx-h
-                if train_end_idx< lags: # Need enough data for lags
+                pub_lag =2    #respect publication lag of 2 months
+                train_end_idx =current_idx-h-pub_lag
+                if train_end_idx <training_offset+lags:
                     current_idx+= 1
                     continue
                 # Define indices for slicing
                 idx_train_end = train_end_idx
                 # Ensure we don't go negative on start
-                idx_test_start = max(0, current_idx - (h + 2)) 
-                # Initial Slices
-                # ... inside the while current_idx < total_rows loop ...
+                pub_lag = 2
+                t_obs = current_idx - pub_lag
+
+                # ensure we have enough rows for lags
+                test_start = max(training_offset, t_obs - lags)
+                
 
                 # 1. Create Initial Slices
                 df_train = df_system.iloc[training_offset : idx_train_end + 1].dropna(subset=target_col_list)
-                X_test_raw = df_system.iloc[idx_test_start : current_idx + 1]
+                X_test_raw = df_system.iloc[test_start : t_obs + 1].copy()
                 
                 # 2. IDENTIFY AND SEPARATE TARGETS FROM PREDICTORS
                 # We must drop ALL target columns from the data used for PCA/Factors
@@ -153,42 +191,25 @@ def run_experiment(config):
                 y_test = X_test_raw[target_col_list]
 
                 if use_pca_factors:
-                    # Step A: Variable Selection
-                    # Pass the PREDICTOR ONLY dataframe to get_pca
-                    # Drop ALL columns containing 'target_' from the dataframe itself
-                    cols_to_exclude = [c for c in df_train.columns if 'target_' in c]
-                    X_train_safe = df_train.drop(columns=cols_to_exclude)
-                    X_test_safe  = X_test_raw.drop(columns=cols_to_exclude)
+                    cols_to_drop = [c for c in df_train.columns if 'target_' in c]
+                    X_train_safe = df_train.drop(columns=cols_to_drop)
+                    X_test_safe  = X_test_raw.drop(columns=cols_to_drop)
 
-                    # 2. Now call get_pca using the SAFE dataframe columns
-                    # You don't even need 'target_cols_to_drop' anymore because they are gone
-                    pca_cols, keep_cols = get_pca(
-                        df_columns=X_train_safe.columns, # Pass clean columns
-                        target_cols_to_drop=[],          # Redundant now, but keep empty list
-                        target_name=target_name, 
-                        config=config
-                    )
-                    # Step B: Factor Creation
-                    # Pass the PREDICTOR ONLY dataframes
                     X_train_factors, X_test_factors, _ = make_factor_features_time_safe(
-                        X_train=X_train_safe, # <--- No targets here
-                        X_test=X_test_safe,   # <--- No targets here
-                        pca_cols=pca_cols,
-                        keep_cols=keep_cols,
+                        X_train=X_train_safe,
+                        X_test=X_test_safe,
+                        pca_cols=pca_bundle_fixed["pca_cols"],
+                        keep_cols=pca_bundle_fixed["keep_cols"],
                         config=config,
                         forecast_date=forecast_date,
                         target_name=target_name,
                         h=h,
                         top_k=5,
-                        pca_bundle=None 
+                        pca_bundle=pca_bundle_fixed   # <-- freeze
                     )
 
-                    # Step C: Re-attach Targets for BVAR
-                    # BVAR needs [Target, Features]
                     df_train = pd.concat([y_train, X_train_factors], axis=1)
                     X_test   = pd.concat([y_test,  X_test_factors], axis=1)
-                    
-                    # Ensure columns align perfectly
                     X_test = X_test.reindex(columns=df_train.columns)
                 else:
                     # If not using PCA, X_test is just the raw slice
@@ -238,7 +259,8 @@ def run_experiment(config):
                     col = X_test.columns.get_loc(tc)
                     for L in range(max_lag + 1):  # L=0,1
                         # row for (t-L) currently holds y_{t-L+h}; replace with y_{t-L}
-                        X_test.iloc[-1 - L, col] = df_system.iloc[current_idx - h - L][tc]
+                        X_test = df_system.iloc[start : current_idx + 1].copy()
+
 
                 
                 #forecast
@@ -257,6 +279,7 @@ def run_experiment(config):
                 actual_yoy=df_yoy.loc[target_date, target_name]
                 #to calc price levels need levelsof core and headline cpi
                 raw_col= f"{target_name}_level"
+                T = target_date
                 #direct forecast evaluation: if h==12 can evaluate directly
                 if h==12:
                     preds_draws_yoy=preds_draws

@@ -39,7 +39,7 @@ results_df= pd.DataFrame(results_list)
 for var in variables:
     print(f"\nBest Distributions for {var}:")
     print(results_df[results_df['Variable']== var].sort_values('Log-Likelihood', ascending=False))
-    save_name=f"Code/Scripts/Plots/05_diagnostic_distribution_analysis/dist_fits_{var}.csv"
+    save_name=f"Code/Scripts/Plots_and_Tables/05_diagnostic_distribution_analysis/dist_fits_{var}.csv"
     results_df.to_csv(save_name) 
 
 #-> skew-t fits best on training data (for Core 1. and for headline 2. best)

@@ -382,12 +382,11 @@ def load_business_confidence_eu(file_path):
 #define lag shift function to shift according to publication date -> no data leakage for forecasting
 
 #make a configuration dictionary to define how many months to shift each variable
-LAG_CONFIG= {
-    #don't shift target
+lag_config= {
     'cpi': 0,
     #available start of next month (1. day of next month or end of month t -> Shift 1):
     'oil_prices': 1, 'interest': 1, 'mortgages': 1, 'eu_interest': 1,'kof_barometer': 1, 'manufacturing_eu': 1, 
-    #available month + 2 (Shift 2): release date > 1st of next month implies we can't use it until the month after
+    #available month + 2 (Shift 2): release date >1st of next month implies we can't use it until the month after
     'unemployment': 2, 'exchange': 2,  'vol_loans': 2, 'money_supply': 2, 'business_conf_eu': 2, 'interest_rates': 2, 'retail': 2,
     #real turnover: constrained by slower variable (Turnover), but need 2 months for PPI as seperate variable
     'turnover_ppi': {'PPI': 2,'real_turnover': 5},
@@ -472,7 +471,7 @@ def load_all_data_parallel(file_path):
 def merge_all_data(data_dict):
     """Merge all loaded datasets into single data_before_split DataFrame"""
     #apply shifting before merging to ensure no data leakage in final dataset
-    shifted_data_dict =publication_lags(data_dict, LAG_CONFIG)
+    shifted_data_dict =publication_lags(data_dict, lag_config)
     #start with base datetime index (using CPI as anchor)
     if 'cpi' in shifted_data_dict:
         data_before_split= shifted_data_dict['cpi'].copy()

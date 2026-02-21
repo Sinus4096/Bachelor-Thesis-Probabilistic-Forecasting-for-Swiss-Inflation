@@ -3,9 +3,6 @@ import sys
 import pandas as pd
 import numpy as np
 from quantile_forest import RandomForestQuantileRegressor
-from sklearn.pipeline import Pipeline
-
-from sklearn.preprocessing import StandardScaler
 import yaml
 import argparse
 from scipy.stats import nct
@@ -119,14 +116,16 @@ def run_experiment(config):
                 if current_date.month not in snb_months:
                     current_idx+= 1
                     continue
+                pub_lag = 2  #have to wait 2 months for the target to be available
+
                 #at current_idx, last observable target is at current_idx -h
-                last_trainable_idx = current_idx - h  
+                last_trainable_idx = current_idx - h- pub_lag
                 #safety sheck for enough data
                 if last_trainable_idx< 0:
                     current_idx+= 1
                     continue
-                #define window
-                train_indices = range(0, last_trainable_idx + 1)
+                #define window matching with bvar
+                train_indices = range(training_offset, last_trainable_idx + 1)
 
                 #separate X and Y
                 X_slice= df.drop(columns=target_cols_to_drop) #drop all cols starting with target_
@@ -199,39 +198,44 @@ def run_experiment(config):
                 shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
                 #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
                 shap_combined= shap_tree.copy()           
+                T = target_date
                 #check if target date exists in df_yoy (if not, cannot evaluate)
-                if target_date in df_yoy.index:
-                        
-                    #get actual value from df_yoy
-                    actual_val= df_yoy.loc[target_date, yoy_col] 
-                    if forecast_method=='direct' or h==12:
-                        #direct forecast or 12m ahead: use qrf preds directly
-                        preds_dense_yoy= preds_dense
-                        preds_plot_yoy= preds_plot
-                        #base effect and scaling for shapley values
-                        base_effect = 0.0
-                        scaling_factor = 1.0
-                    #else reconstruct the forecasted YoY                     
-                    else: #if h<12, combine known histaory and model preds
-                        months_back=12 - h  #need the change from t-(12-h) to t
-                        history_date= forecast_date -pd.DateOffset(months=months_back)
-                        #check if history date exists
-                        if history_date not in df_yoy.index:
-                            #cannot reconstruct if no history date-> skip
-                            current_idx+=1
+                if target_date not in df_yoy.index:
+                    current_idx += 1
+                    continue
+                
+                else:
+                    if h == 12:
+                        # For 12m horizon, do NOT reconstruct using levels with pub lag,
+                        # because lower = T-12 = t is not observed at time t when pub_lag>0.
+                        preds_dense_yoy = preds_dense.copy()
+                        preds_plot_yoy  = preds_plot.copy()
+                        scaling_factor  = 1.0
+                        base_effect     = 0.0
+                    else:
+                        pub_lag = 2
+                        lower = T - pd.DateOffset(months=12)
+                        last_known_date = forecast_date - pd.DateOffset(months=pub_lag)
+
+                        # availability checks (evaluation still uses df_yoy at T, that's fine ex post)
+                        if (last_known_date not in df_yoy.index) or (lower not in df_yoy.index) or (T not in df_yoy.index):
+                            current_idx += 1
                             continue
-                        #get law log prices
-                        p_t=np.log(df_yoy.loc[forecast_date, yoy_raw])
-                        p_hist=np.log(df_yoy.loc[history_date, yoy_raw])
-                        #calc growth that already happened
-                        base_effect= (p_t-p_hist)*100
-                        #deannualize the model preds
-                        scaling_factor= h/12
-                        pred_dense_h_step= preds_dense *scaling_factor
-                        pred_plot_h_step= preds_plot *scaling_factor 
-                        #combine
-                        preds_dense_yoy=base_effect +pred_dense_h_step
-                        preds_plot_yoy= base_effect+pred_plot_h_step
+
+                        # base effect uses last-known published level at origin
+                        p_known = np.log(df_yoy.loc[last_known_date, yoy_raw])  # P_{t-2}
+                        p_low   = np.log(df_yoy.loc[lower, yoy_raw])            # P_{t+h-12}
+                        base_effect = 100.0 * (p_known - p_low)
+
+                        scaling_factor = h / 12.0  # model predicts annualized h-month change
+                        preds_dense_yoy = base_effect + preds_dense * scaling_factor
+                        preds_plot_yoy  = base_effect + preds_plot  * scaling_factor
+
+                    actual_val = df_yoy.loc[T, yoy_col]
+                    #secure so for last cols
+                    if pd.isna(actual_val):
+                        current_idx += 1
+                        continue                        
                     #initialize dict to store shap values for this forecast
                     final_shap={}
                     #apply scaling to shap values if 

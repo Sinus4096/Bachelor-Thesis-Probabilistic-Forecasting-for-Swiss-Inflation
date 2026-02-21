@@ -1,6 +1,6 @@
 ,Variable,ADF Statistic,p-value,Lags Used (AIC for decision),Observations,Stationary? (at 5%),1% Critical,5% Critical
 0,PPI,-7.4731,0.0,0,157,Yes,-3.4727,-2.8801
-1,real_turnover,-6.1356,0.0,2,155,Yes,-3.4733,-2.8804
+1,real_turnover,-6.2316,0.0,2,155,Yes,-3.4733,-2.8804
 2,retail_turnover,-16.1073,0.0,1,156,Yes,-3.473,-2.8803
 3,Manufacturing_EU,-5.2661,0.0,6,151,Yes,-3.4744,-2.8809
 4,Vol_loans,-13.4777,0.0,0,157,Yes,-3.4727,-2.8801

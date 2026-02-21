@@ -60,7 +60,7 @@ axes[1].set_xlabel('Date', fontweight='bold', labelpad=10)
 
 #plot and save
 plt.tight_layout(rect=[0, 0, 1, 0.96]) 
-save_name=f"Code/Scripts/Plots/02_eda_raw/Time_Series_CPI.png"
+save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/Time_Series_CPI.png"
 plt.savefig(save_name, dpi=300)
 #observations:
 #there is a clear long-term upward trend in both Core and Headline CPI, showing a steady increase in price levels from 2000 through 2024.
@@ -102,7 +102,7 @@ for spine in ['top', 'right', 'left']:  #clean spines
     ax2.spines[spine].set_visible(False)
 ax2.grid(axis='x', alpha=0.3)
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-save_name=f"Code/Scripts/Plots/02_eda_raw/YoY_CPI_w_distrib.png"
+save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/YoY_CPI_w_distrib.png"
 plt.savefig(save_name, dpi=300)
 
 
@@ -150,7 +150,7 @@ for fig_idx, chunk in enumerate(chunks):
     #figure title for both chunks
     fig.suptitle(f'Economic Indicators Trends (Part {fig_idx +1})', fontsize=22, fontweight='bold')
 
-    save_name=f"Code/Scripts/Plots/02_eda_raw/Time_Series_features{fig_idx +1}.png"
+    save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/Time_Series_features{fig_idx +1}.png"
     plt.savefig(save_name, dpi=300)
 
 
@@ -201,7 +201,7 @@ pd.options.display.float_format ='{:.4f}'.format
 #reorder cols
 cols= ['mean', 'std', 'min', '50%', 'max', 'extreme_outliers', 'outlier_pct']
 #print
-save_name=f"Code/Scripts/Plots/02_eda_raw/stats_and_outlier_insp.csv"
+save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/stats_and_outlier_insp.csv"
 stats[cols].to_csv(save_name) 
 print(stats[cols])
 
@@ -308,7 +308,7 @@ for start_idx in range(0, len(all_vars), vars_per_fig):
     fig.suptitle(f'ACF & PACF Plots of all Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_initial_{chunk_nr}.png"
+    save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ACF_initial_{chunk_nr}.png"
     plt.savefig(save_name, dpi=300)
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
@@ -377,7 +377,7 @@ adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results: ")
 print(adf_table) 
-save_name=f"Code/Scripts/Plots/02_eda_raw/ADF_initial.csv"
+save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ADF_initial.csv"
 adf_table.to_csv(save_name) 
 
 #--------------------------------
@@ -465,7 +465,7 @@ for start_idx in range(0, len(growth_vars), vars_per_fig):
     fig.suptitle(f'ACF & PACF Plots of Detrended Variables (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_detrended_{chunk_nr}.png"
+    save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ACF_detrended_{chunk_nr}.png"
     plt.savefig(save_name, dpi=300)
     #add 1 to chunknr for next chunk plot
     chunk_nr+=1
@@ -522,7 +522,7 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     fig.suptitle(f'ACF & PACF Plots of Annualized Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_annualized_CPI{chunk_nr}.png"
+    save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ACF_annualized_CPI{chunk_nr}.png"
     plt.savefig(save_name, dpi=300)
     chunk_nr+=1
 
@@ -567,7 +567,7 @@ for start_idx in range(0, len(variables_to_plot), vars_per_fig):
     fig.suptitle(f'ACF & PACF Plots of Annualized and Differenced Targets (Part {chunk_nr})', fontsize=22, fontweight='bold')
     #plot
     plt.tight_layout()
-    save_name=f"Code/Scripts/Plots/02_eda_raw/ACF_annualized_differenced_CPI{chunk_nr}.png"
+    save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ACF_annualized_differenced_CPI{chunk_nr}.png"
     plt.savefig(save_name, dpi=300)
     chunk_nr+=1
 #acf:data still has long-term cyclicality (eg business cycles)
@@ -591,7 +591,7 @@ adf_table=pd.DataFrame(adf_results)
 #display the table
 print("\n Augmented Dickey-Fuller Test Results for Trending Variables: ")
 print(adf_table)
-save_name=f"Code/Scripts/Plots/02_eda_raw/ADF_final.csv"
+save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/ADF_final.csv"
 adf_table.to_csv(save_name) 
 #remark:with experimetning, we can see that diff.diff(12) makes the data stationary but as such the predictions won't be interpretable
 #as the acf shows clear seasonal spikes when taking diff alone it's not stationary either

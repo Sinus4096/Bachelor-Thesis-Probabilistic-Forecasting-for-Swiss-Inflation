@@ -34,7 +34,7 @@ sns.heatmap(corr_matrix, mask=mask, cmap=cmap, center=0, square=True, linewidths
 plt.title("Correlation Structure of Predictors (Training Set)", fontsize=16, pad=20, weight='bold')
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
-#plt.savefig('Correlation_Heatmap.png', dpi=300)
+plt.savefig('Correlation_Heatmap.png', dpi=300)
 #observation:
 #The matrix shows rectangular blocks of red and blue. This indicates that variables like M1, M2, and the Saron Rate were 
 # moving in near-perfect lockstep during 2001–2012. This provides a definitive mandate for the Stock and Watson (2002) approach.
@@ -64,7 +64,7 @@ plt.xlabel('Variance Inflation Factor (Log Scale)', weight='bold')
 plt.title('Predictor Redundancy Analysis', fontsize=16, weight='bold')
 plt.legend()
 plt.tight_layout()
-#plt.savefig('VIF_Analysis_Chart.png', dpi=300)
+plt.savefig('VIF_Analysis_Chart.png', dpi=300)
 
 
 #Eigenvalue analysis
@@ -111,7 +111,7 @@ ax2.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
 plt.title("Scree Plot & Cumulative Information Capture", fontsize=16, weight='bold', pad=15)
 fig.legend(loc='upper right', bbox_to_anchor=(0.85, 0.85))
 plt.tight_layout()
-#plt.savefig('Scree_Plot.png', dpi=300)
+plt.savefig('Scree_Plot.png', dpi=300)
 #observation:
 #Individual Eigenvalues (Blue Line): This line represents the variance captured by each individual principal component. The sharp ellbow
 # at the fourth or fifth component indicates that the vast majority of the predictable dynamics in the 33-variable dataset are 
