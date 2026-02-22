@@ -130,30 +130,18 @@ def run_experiment():
                     current_idx += retrain_step_months
                     continue
 
-                # --- 1. PREPARE DIRECT FORECASTING DATA ---
-                # We create a temporary dataframe to align Y (target) and X (lagged value)
-                # We take data up to the current_idx to ensure we can pull the X for the forecast
-                temp_data = pd.DataFrame({'y': df[target_col].iloc[:current_idx+1]})
-                
-                # Create the regressor X: The target column shifted by (h + 2)
-                # This ensures we regress y_{t+h} on y_{t-2}
-                temp_data['X'] = temp_data['y'].shift(direct_lag)
-                
-                # Drop NaNs created by the shift
-                temp_data = temp_data.dropna()
+                # y is the pre-shifted direct target series (already aligned at origin dates)
+                y = df[target_col].copy()
+
+                X = y.shift(direct_lag)
+
+                temp = pd.DataFrame({"y": y, "X": X}).dropna()
                 
                 # Slice the TRAINING data (strictly stopping at known targets)
                 # We use the integer location. The last trainable row is 'last_trainable_idx'.
-                # We must find the corresponding timestamp or integer location in our temp_data
-                train_mask = (df.index[0] + pd.to_timedelta(np.arange(len(df)), unit='D')) # specific index handling not needed if we rely on iloc
                 
-                # Simpler slicing: define cut-off integer relative to the original df
-                # We map the global integer index to the temp_data
-                train_data = temp_data.iloc[: (last_trainable_idx - training_offset)] 
-                # Note: exact slicing depends on how much data was dropped. 
-                # Safer method: Slice by Date Index
                 cutoff_date = df.index[last_trainable_idx]
-                train_data = temp_data.loc[:cutoff_date]
+                train_data = temp.loc[:cutoff_date]
 
                 # Apply Rolling Window
                 if len(train_data) > rolling_window_size:
@@ -195,152 +183,171 @@ def run_experiment():
                 
                 mu_pred = float(forecasts.mean.iloc[-1, 0])
 
-                # variance fallback if degenerate
-                if model_res.params.get('omega', 0) < 1e-6 and model_res.params.get('alpha[1]', 0) < 1e-6:
+                sigma_pred = float(np.sqrt(forecasts.variance.iloc[-1, 0]))
+                if not np.isfinite(sigma_pred) or sigma_pred <= 0:
                     sigma_pred = float(np.std(y_train))
-                else:
-                    sigma_pred = float(np.sqrt(forecasts.variance.iloc[-1, 0]))
+
 
                 #extract skew-t parameters from GARCH fit
                 dist_params= model_res.params.iloc[-2:]
 
-                #reconstruct to yoy changes: check if target date exists in yoy data
-                # df_yoy is already shifted to availability time
-                # Check target availability
-                if target_date not in df_yoy.index:
+                # =========================================================
+                # (A) DIRECT TARGET EVALUATION (MAIN COMPARISON)
+                # =========================================================
+
+                actual_direct = df.loc[forecast_date, target_col]
+                if pd.isna(actual_direct):
                     current_idx += retrain_step_months
                     continue
 
-                # Define critical dates strictly based on information available
-                T = target_date                     # The future date we are predicting
-                t_now = forecast_date               # Today
-                t_known = t_now - pd.DateOffset(months=pub_lag) # The last data we actually have
-                
-                # For YoY calculation: Inflation ~ ln(Price_T) - ln(Price_T-12)
-                # We need the base price from T-12
-                lower = T - pd.DateOffset(months=12)
+                # Build predictive distribution in DIRECT space
+                # (use skew-t from arch directly)
+                preds_dense_direct = mu_pred + sigma_pred * model_res.model.distribution.ppf(dense_quant, dist_params)
 
-                # Check if all necessary dates exist in the index
-                if (t_known not in df_yoy.index) or (lower not in df_yoy.index) or (T not in df_yoy.index):
-                    current_idx += retrain_step_months
-                    continue
-                scaling_factor = h / 12
+                # fit skew-t (same pipeline as other models)
+                skew_params_direct = fit_skew_t(preds_dense_direct.flatten(), dense_quant)
 
-                actual_val = df_yoy.loc[T, yoy_col]
+                crps_direct_parametric = calculate_crps(actual_direct, skew_params_direct)
+                crps_direct_empirical = calculate_crps_quantile(
+                    [actual_direct],
+                    preds_dense_direct.reshape(1, -1),
+                    dense_quant
+                )
 
-                # Get the Price Levels (Log)
-                # CRITICAL FIX: Use t_known (t-2), NOT t0 (t)
-                p_known = np.log(df_yoy.loc[t_known, yoy_raw]) 
-                p_base  = np.log(df_yoy.loc[lower, yoy_raw])
-                
-                # Base Effect Calculation
-                # This calculates the momentum committed up to the last KNOWN data point.
-                # Note: The gap between p_known and p_target is covered by your model's forecast.
-                base_effect = 100 * (p_known - p_base)
+                pit_direct = nct.cdf(
+                    actual_direct,
+                    skew_params_direct[0],
+                    skew_params_direct[1],
+                    loc=skew_params_direct[2],
+                    scale=skew_params_direct[3],
+                )
 
-                # SCALING LOGIC
-                # This depends on exactly what 'mu_pred' represents.
-                # If mu_pred is the "Average Monthly Inflation Rate" forecasted over the gap:
-                # The gap we need to bridge is from t_known to T.
-                # Total months = h + pub_lag
-                
-                total_gap_months = h + pub_lag
-                
-                # Assuming mu_pred is a monthly rate (or scaled similarly):
-                # We project the price forward: P_target = P_known + (Forecast * Gap)
-                # Then subtract P_base to get YoY.
-                
-                # Note: Adjust 'scaling_factor' based on your specific target definition.
-                # If mu_pred is already scaled to the horizon h, you might need to adjust.
-                # Assuming simple linear projection of the rate:
-                
-                projected_growth = mu_pred * (total_gap_months / 12) # Or however your target is scaled
-                
-                # IF your target was already "Inflation over h months":
-                # Then you just add mu_pred. 
-                # But since you used 'scaling_factor = h/12' before, I assume mu_pred is annualized.
-                
-                # Corrected logic using your previous scaling style but applied to the full gap:
-                # mu_yoy = (Price_Known - Price_Base) + (Forecasted_Change_over_Gap)
-                
-                # Let's stick to your logic but anchor correctly:
-                # You want to estimate P_T. 
-                # P_T_est = p_known + (mu_pred_deannualized * total_gap_months)
-                
-                # If mu_pred is annualized:
-                monthly_drift = mu_pred / scaling_factor # Recover monthly drift (approx)
-                if scaling_factor == 0: monthly_drift = 0 # safety
-                
-                # Re-apply drift over the TRUE unknown period (h + 2 months)
-                # This makes the forecast responsible for the 2 missing months + h future months
-                prediction_gap_component = mu_pred * (total_gap_months / 12) 
-                
-                # Alternatively, if you want to keep it simple and your mu_pred specifically 
-                # covers the shift we did in step 1, just use the base_effect of p_known.
-                
-                mu_yoy = base_effect + (mu_pred * (total_gap_months/h)) 
-                # Note: The math above depends heavily on if 'mu_pred' is a RATE or a LEVEL.
-                # Given your previous code, let's try the safest "No-Peek" version:
-                
-                mu_yoy = base_effect + mu_pred * (total_gap_months/12)
-                sigma_yoy = sigma_pred * (total_gap_months/12)
+                median_direct = float(mu_pred)
+                rmse_direct = calculate_rmse(actual_direct, median_direct)
 
-                #add robustness check
-                sigma_yoy=max(sigma_yoy, y_train.std() * 0.8)
-                #ask model how many params needed
-                n_shape_params= model_res.model.distribution.num_params
-                #extract correct dist params
-                dist_params= model_res.params.iloc[-n_shape_params:]
-                #reconstrunct quantiles to yoy
-                preds_plot_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(plot_qunat, dist_params)
-                preds_dense_yoy = mu_yoy + sigma_yoy * model_res.model.distribution.ppf(dense_quant, dist_params)
-
-                #shapley values: need params
-                const_val=model_res.params.get('Const', 0)  #get constant
-                
-                # UPDATED SHAP LOGIC for LS Model
-                # In LS models, the param is named 'X' (from the column name) or 'beta[0]'
-                # We filter for anything that isn't Const, omega, alpha, beta(garch), or shape params
+                # SHAP stays direct (NO YoY scaling)
+                const_val = model_res.params.get('Const', 0)
                 exclude_params = ['Const', 'omega', 'alpha[1]', 'beta[1]', 'nu', 'lambda']
-                mean_params = {k: v for k, v in model_res.params.items() 
-                               if k not in exclude_params and 'alpha' not in k and 'beta' not in k}
-                # Fallback: explicitly look for 'X' or 'y['
+                mean_params = {k: v for k, v in model_res.params.items()
+                            if k not in exclude_params and 'alpha' not in k and 'beta' not in k}
+
                 if not mean_params:
-                     mean_params = {k: v for k, v in model_res.params.items() if 'X' in k or 'y[' in k or 'beta[' in k}
+                    mean_params = {k: v for k, v in model_res.params.items() if 'X' in k or 'beta[' in k}
 
-                #call fct for shap values - pass X_train (the regressor) as input
-                shap_dict=shap_values(model_obj=None, X_input=X_train, X_train=None, model_type='linear', linear_coeffs=mean_params, linear_const=const_val)
-                
-                #initialize dict to store shap values
-                final_shap = {}
-                #apply scaling logic to shap results  
-                final_shap['Shap_Base_Effect'] =base_effect #add base effect
-                #scale output
-                for k, v in shap_dict.items():
-                    final_shap[k] =v* scaling_factor
-                
-                #get rmse of meadian forecast
-                sq_error =calculate_rmse(actual_val, preds_plot_yoy[2])
+                shap_dict = shap_values(
+                    model_obj=None,
+                    X_input=X_train,
+                    X_train=None,
+                    model_type='linear',
+                    linear_coeffs=mean_params,
+                    linear_const=const_val
+                )
 
-                # ... (rest of your code continues from here) ...
-                #use skew t to fit data for parametric crps eval
-                y_fit_data=preds_dense_yoy.flatten() #data to fit
-                skew_params=fit_skew_t(y_fit_data, dense_quant)
-                #calc pit values for crps eval
-                pit_val=nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                #calc parametric crps based on fitted skew-t
-                param_crps= calculate_crps(actual_val, skew_params)
-                #empirical crps to see what fitting cost us
-                empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy.reshape(1,-1), dense_quant)
-                
-                #store results
-                result= {'Date': forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[2], 
-                    'q05': preds_plot_yoy[0], 'q16': preds_plot_yoy[1], 'q84': preds_plot_yoy[3], 'q95': preds_plot_yoy[4], 'Squared_Error': sq_error,
-                    'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': param_crps, 'PIT': pit_val, 'df_skewt': skew_params[0], 'nc_skewt': skew_params[1], 
-                    'loc_skewt': skew_params[2], 'scale_skewt': skew_params[3]}
-                #add Shapley values to the result dictionary 
-                result.update(final_shap)
-                #append to recursive preds
+                final_shap_direct = {f"SHAP_{k}": float(np.asarray(v).squeeze()) for k, v in shap_dict.items()}
+
+                # =========================================================
+                # (B) EX-POST YOY RECONSTRUCTION (PLOTS ONLY)
+                # =========================================================
+
+                T = target_date
+                if T not in df_yoy.index:
+                    current_idx += retrain_step_months
+                    continue
+
+                actual_yoy = df_yoy.loc[T, yoy_col]
+                if pd.isna(actual_yoy):
+                    current_idx += retrain_step_months
+                    continue
+
+                raw_col = yoy_raw
+                scaling = h / 12.0
+
+                if h == 12:
+                    preds_dense_yoy_expost = preds_dense_direct.copy()
+                    base_effect_expost = 0.0
+                else:
+                    lower = T - pd.DateOffset(months=12)
+                    if (forecast_date not in df_yoy.index) or (lower not in df_yoy.index):
+                        current_idx += retrain_step_months
+                        continue
+
+                    p_t = np.log(df_yoy.loc[forecast_date, raw_col])
+                    p_low = np.log(df_yoy.loc[lower, raw_col])
+                    base_effect_expost = 100.0 * (p_t - p_low)
+
+                    preds_dense_yoy_expost = base_effect_expost + preds_dense_direct * scaling
+
+                # plot quantiles
+                q05_yoy = float(np.percentile(preds_dense_yoy_expost, 5))
+                q16_yoy = float(np.percentile(preds_dense_yoy_expost, 16))
+                q84_yoy = float(np.percentile(preds_dense_yoy_expost, 84))
+                q95_yoy = float(np.percentile(preds_dense_yoy_expost, 95))
+                median_yoy = float(np.median(preds_dense_yoy_expost))
+
+                # =========================================================
+                # (C) TIME-SAFE YOY CRPS (SNB-STYLE)
+                # =========================================================
+
+                pub_lag = 2
+                t_known = forecast_date - pd.DateOffset(months=pub_lag)
+
+                crps_yoy_timesafe_parametric = np.nan
+                crps_yoy_timesafe_empirical = np.nan
+
+                if h == 12:
+                    preds_dense_yoy_timesafe = preds_dense_direct.copy()
+                else:
+                    lower = T - pd.DateOffset(months=12)
+                    if (t_known in df_yoy.index) and (lower in df_yoy.index):
+                        p_known = np.log(df_yoy.loc[t_known, raw_col])
+                        p_low = np.log(df_yoy.loc[lower, raw_col])
+
+                        base_effect_timesafe = 100.0 * (p_known - p_low)
+                        preds_dense_yoy_timesafe = base_effect_timesafe + preds_dense_direct * scaling
+                    else:
+                        preds_dense_yoy_timesafe = None
+
+                if preds_dense_yoy_timesafe is not None:
+                    skew_params_yoy = fit_skew_t(preds_dense_yoy_timesafe.flatten(), dense_quant)
+
+                    crps_yoy_timesafe_parametric = calculate_crps(actual_yoy, skew_params_yoy)
+                    crps_yoy_timesafe_empirical = calculate_crps_quantile(
+                        [actual_yoy],
+                        preds_dense_yoy_timesafe.reshape(1, -1),
+                        dense_quant
+                    )
+
+                # =========================================================
+                # STORE RESULTS (same structure as other models)
+                # =========================================================
+
+                result = {
+                    'Date': forecast_date,
+                    'Target_date': target_date,
+
+                    # DIRECT (main comparison)
+                    'Actual_direct': float(actual_direct),
+                    'Forecast_median_direct': median_direct,
+                    'CRPS_direct_parametric': float(crps_direct_parametric),
+                    'CRPS_direct_empirical': float(np.mean(crps_direct_empirical)),
+                    'RMSE_direct': float(rmse_direct),
+                    'PIT_direct': float(pit_direct),
+
+                    # YoY plots
+                    'Actual_YoY': float(actual_yoy),
+                    'Forecast_median_YoY': median_yoy,
+                    'q05_YoY': q05_yoy,
+                    'q16_YoY': q16_yoy,
+                    'q84_YoY': q84_yoy,
+                    'q95_YoY': q95_yoy,
+                    'BaseEffect_YoY_expost': float(base_effect_expost),
+
+                    # YoY time-safe metric
+                    'CRPS_YoY_timesafe_parametric': float(crps_yoy_timesafe_parametric) if np.isfinite(crps_yoy_timesafe_parametric) else np.nan,
+                    'CRPS_YoY_timesafe_empirical': float(np.mean(crps_yoy_timesafe_empirical)) if isinstance(crps_yoy_timesafe_empirical, (list, np.ndarray)) else crps_yoy_timesafe_empirical,
+                }
+
+                result.update(final_shap_direct)
                 recursive_preds.append(result)
                 #to next window
                 current_idx+=retrain_step_months

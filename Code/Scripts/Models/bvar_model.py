@@ -254,12 +254,15 @@ def run_experiment(config):
 
                     start = current_idx - (required_rows - 1)
                     X_test = df_system.iloc[start : current_idx + 1]
-                max_lag = max(model.lag_indices)  # = 1
-                for tc in target_col_list:
-                    col = X_test.columns.get_loc(tc)
-                    for L in range(max_lag + 1):  # L=0,1
-                        # row for (t-L) currently holds y_{t-L+h}; replace with y_{t-L}
-                        X_test = df_system.iloc[start : current_idx + 1].copy()
+                    max_lag = max(model.lag_indices)  # = 1
+
+                    for tc in target_col_list:
+                        col = X_test.columns.get_loc(tc)
+                        for L in range(max_lag + 1):  # L=0,1
+                            # row for (t-L) currently holds y_{t-L+h}; replace with y_{t-L}
+                            X_test = df_system.iloc[start : current_idx + 1].copy()
+
+
 
 
                 
@@ -275,68 +278,158 @@ def run_experiment(config):
                 #calc shapley values
                 shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
 
-                #get actual yoy value
-                actual_yoy=df_yoy.loc[target_date, target_name]
-                #to calc price levels need levelsof core and headline cpi
-                raw_col= f"{target_name}_level"
+                # =========================================================
+                # (A) DIRECT TARGET EVALUATION (MAIN MODEL COMPARISON)
+                # =========================================================
+                eval_quantiles = np.linspace(0.01, 0.99, 99)
+
+                # actual direct target (pre-shifted target series at forecast origin)
+                actual_direct = df.loc[forecast_date, target_col_str]
+                if pd.isna(actual_direct):
+                    current_idx += 1
+                    continue
+
+                # Fit skew-t to DIRECT predictive distribution (draws -> quantiles -> fit)
+                direct_fit_quantiles = np.percentile(preds_draws, eval_quantiles * 100.0)
+                skew_params_direct = fit_skew_t(direct_fit_quantiles, eval_quantiles)
+
+                crps_direct_parametric = calculate_crps(actual_direct, skew_params_direct)
+                crps_direct_empirical  = calculate_crps_quantile(
+                    actual_direct,
+                    direct_fit_quantiles[None, :],
+                    eval_quantiles
+                )
+                if hasattr(crps_direct_empirical, "__iter__"):
+                    crps_direct_empirical = float(np.mean(crps_direct_empirical))
+
+                pit_direct = stats.nct.cdf(
+                    actual_direct,
+                    skew_params_direct[0],
+                    skew_params_direct[1],
+                    loc=skew_params_direct[2],
+                    scale=skew_params_direct[3],
+                )
+
+                median_direct = float(np.median(preds_draws))
+                rmse_direct   = calculate_rmse(actual_direct, median_direct)
+
+                # SHAP stays in DIRECT space (do NOT transform to YoY)
+                final_shap_direct = {f"SHAP_{k}": float(np.asarray(v).squeeze()) for k, v in shap_dict.items()}
+
+                # =========================================================
+                # (B) EX-POST YOY RECONSTRUCTION (PLOTS ONLY)
+                # =========================================================
                 T = target_date
-                #direct forecast evaluation: if h==12 can evaluate directly
-                if h==12:
-                    preds_draws_yoy=preds_draws
-                    #shapley scaling: standard deviation
-                    shap_scaling = 1.0
-                    base_shap_effect=0 #since we are forecasting the change from t-12 to t, the base effect is 0 (no change) and the shapley values show how much each feature contributes to deviating from this base effect
+                if T not in df_yoy.index:
+                    current_idx += 1
+                    continue
+
+                actual_yoy = df_yoy.loc[T, target_name]
+                if pd.isna(actual_yoy):
+                    current_idx += 1
+                    continue
+
+                raw_col = f"{target_name}_level"   # e.g. "Core_level" / "Headline_level"
+                scaling = h / 12.0
+
+                if h == 12:
+                    # If your 12m target is already YoY-like in your construction, no anchor needed
+                    preds_draws_yoy_expost = preds_draws.copy()
+                    base_effect_expost = 0.0
                 else:
-                    #for h<12: combine history with deannualized model predictions
-                    months_back=12- h#need the change from t-(12-h) to t
-                    history_date= forecast_date-pd.DateOffset(months=months_back)
+                    # ex-post uses realized level at forecast_date (P_t)
+                    lower = T - pd.DateOffset(months=12)
+                    if (forecast_date not in df_yoy.index) or (lower not in df_yoy.index):
+                        current_idx += 1
+                        continue
 
-                    if history_date not in df_yoy.index:
-                        current_idx+= 1 
-                        continue  #skip if not enough history to deannualize
-                    #calc log price levels
-                    p_t= np.log(df_yoy.loc[forecast_date, raw_col])
-                    p_hist= np.log(df_yoy.loc[history_date, raw_col])   
-                    #deannualize model preds
-                    base_effect= (p_t-p_hist)*100
-                    scaling_factor= h/12
-                    preds_draws_yoy= base_effect+(preds_draws*scaling_factor)
-                    #shapley scaling: scale the shapley values by the same factor to reflect their contribution to the deannualized forecast
-                    shap_scaling= scaling_factor
-                    base_shap_effect= base_effect  #the base effect is the deannualized change, and the shapley values show how much each feature contributes to deviating from this deannualized change
+                    p_t   = np.log(df_yoy.loc[forecast_date, raw_col])   # realized P_t (ex-post)
+                    p_low = np.log(df_yoy.loc[lower, raw_col])           # P_{T-12}
+                    base_effect_expost = 100.0 * (p_t - p_low)
 
-                #rescale shapley values from standardized units to YoY units                
-                final_shap = {f"SHAP_{k}": float(np.asarray(v).squeeze()) * shap_scaling for k, v in shap_dict.items()}
-                final_shap["Shap_Base_Effect"] = float(base_shap_effect)
+                    preds_draws_yoy_expost = base_effect_expost + preds_draws * scaling
 
-                #calc CRPS
-                eval_quantiles= np.linspace(0.01, 0.99, 99)
-                #bvar gives draws so we calc quantiles for the fit
-                y_fit_quantiles= np.percentile(preds_draws_yoy, eval_quantiles*100)
-                #fit skew-t to the draws
-                skew_params= fit_skew_t(y_fit_quantiles, eval_quantiles)
-                #empirical crps via quantiles
-                empirical_crps = calculate_crps_quantile(actual_yoy, y_fit_quantiles[None, :], eval_quantiles)
-                if hasattr(empirical_crps, '__iter__'): empirical_crps=np.mean(empirical_crps)   #if has multiple values average them
-                #skew-t crps
-                parametric_crps= calculate_crps(actual_yoy, skew_params)
-                #PIT value
-                pit_value= stats.nct.cdf(actual_yoy, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                #RMSE 
-                median= np.median(preds_draws_yoy) #get median forecast
-                rmse= calculate_rmse(actual_yoy, median)
-                    
-                #store result to specific target list
-                results_entry=({'Date': forecast_date,  'Target_date': target_date,'Actual': actual_yoy,
-                                                    'Forecast_median': median, 'q05': np.percentile(preds_draws_yoy, 5), 'q16': np.percentile(preds_draws_yoy, 16),
-                                                    'q84': np.percentile(preds_draws_yoy, 84), 'q95': np.percentile(preds_draws_yoy, 95), 'RMSE': rmse,'Empirical_CRPS': empirical_crps,
-                                                    'Parametric_CRPS': parametric_crps, 'df_skewt':skew_params[0],'nc_skewt': skew_params[1], 'loc_skewt': skew_params[2],
-                                                    'scale_skewt': skew_params[3],'PIT': pit_value})
-                 #add shapley values to results entry
-                results_entry.update(final_shap)                
+                # Plot quantiles (YoY, ex-post)
+                q05_yoy = float(np.percentile(preds_draws_yoy_expost, 5))
+                q16_yoy = float(np.percentile(preds_draws_yoy_expost, 16))
+                q84_yoy = float(np.percentile(preds_draws_yoy_expost, 84))
+                q95_yoy = float(np.percentile(preds_draws_yoy_expost, 95))
+                median_yoy = float(np.median(preds_draws_yoy_expost))
+
+                # =========================================================
+                # (C) TIME-SAFE YOY CRPS (SNB-ish METRIC, NO BRIDGE)
+                # =========================================================
+                pub_lag = 2
+                t_known = forecast_date - pd.DateOffset(months=pub_lag)
+
+                crps_yoy_timesafe_parametric = np.nan
+                crps_yoy_timesafe_empirical  = np.nan
+
+                if h == 12:
+                    # again: if 12m target is already YoY-like, time-safe == direct
+                    preds_draws_yoy_timesafe = preds_draws.copy()
+                else:
+                    lower = T - pd.DateOffset(months=12)
+                    if (t_known in df_yoy.index) and (lower in df_yoy.index):
+                        p_known = np.log(df_yoy.loc[t_known, raw_col])   # P_{t-2}
+                        p_low   = np.log(df_yoy.loc[lower,   raw_col])   # P_{T-12}
+
+                        base_effect_timesafe = 100.0 * (p_known - p_low)
+                        preds_draws_yoy_timesafe = base_effect_timesafe + preds_draws * scaling
+                    else:
+                        preds_draws_yoy_timesafe = None
+
+                if preds_draws_yoy_timesafe is not None:
+                    yoy_fit_quantiles = np.percentile(preds_draws_yoy_timesafe, eval_quantiles * 100.0)
+                    skew_params_yoy = fit_skew_t(yoy_fit_quantiles, eval_quantiles)
+
+                    crps_yoy_timesafe_parametric = calculate_crps(actual_yoy, skew_params_yoy)
+                    crps_yoy_timesafe_empirical  = calculate_crps_quantile(
+                        actual_yoy,
+                        yoy_fit_quantiles[None, :],
+                        eval_quantiles
+                    )
+                    if hasattr(crps_yoy_timesafe_empirical, "__iter__"):
+                        crps_yoy_timesafe_empirical = float(np.mean(crps_yoy_timesafe_empirical))
+
+                # =========================================================
+                # STORE RESULTS (DIRECT + YOY PLOTS + YOY TIME-SAFE CRPS)
+                # =========================================================
+                results_entry = {
+                    'Date': forecast_date,
+                    'Target_date': target_date,
+
+                    # (A) Direct target metrics (main comparison)
+                    'Actual_direct': float(actual_direct),
+                    'Forecast_median_direct': median_direct,
+                    'CRPS_direct_parametric': float(crps_direct_parametric),
+                    'CRPS_direct_empirical': float(crps_direct_empirical),
+                    'RMSE_direct': float(rmse_direct),
+                    'PIT_direct': float(pit_direct),
+                    'df_skewt_direct': float(skew_params_direct[0]),
+                    'nc_skewt_direct': float(skew_params_direct[1]),
+                    'loc_skewt_direct': float(skew_params_direct[2]),
+                    'scale_skewt_direct': float(skew_params_direct[3]),
+
+                    # (B) YoY ex-post outputs (plots)
+                    'Actual_YoY': float(actual_yoy),
+                    'Forecast_median_YoY': median_yoy,
+                    'q05_YoY': q05_yoy,
+                    'q16_YoY': q16_yoy,
+                    'q84_YoY': q84_yoy,
+                    'q95_YoY': q95_yoy,
+                    'BaseEffect_YoY_expost': float(base_effect_expost),
+
+                    # (C) YoY time-safe CRPS (SNB-ish metric, no bridge)
+                    'CRPS_YoY_timesafe_parametric': float(crps_yoy_timesafe_parametric) if np.isfinite(crps_yoy_timesafe_parametric) else np.nan,
+                    'CRPS_YoY_timesafe_empirical': float(crps_yoy_timesafe_empirical) if np.isfinite(crps_yoy_timesafe_empirical) else np.nan,
+                }
+
+                # add SHAP (direct space)
+                results_entry.update(final_shap_direct)
+
                 results_list.append(results_entry)
-                #advance window by 1 month
-                current_idx +=1
+                current_idx += 1
 
                         
             #save and evaluate final recursive results

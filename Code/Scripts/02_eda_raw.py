@@ -6,7 +6,7 @@ from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.graphics.tsaplots import plot_pacf
 from statsmodels.tsa.stattools import adfuller
 import math
-
+import scipy.stats as stats
 
 
 
@@ -68,44 +68,60 @@ plt.savefig(save_name, dpi=300)
 #prices which are excluded from the core metric. Additionally, both charts show a noticeable acceleration in the growth rate starting around 2021,
 #indicating a period of sharper inflation in recent years.
 
-#to make the shocks from pandemic and energy crisis more visible, plot YoY changes:
-#calc yoy changes
-df_yoy=df[['Headline_CPI', 'Core_CPI']].pct_change(12)*100
-#create figure
-fig=plt.figure(figsize=(15, 8), dpi=100)
-#define grid
-gs=fig.add_gridspec(1, 2, width_ratios=(4, 1), wspace=0.05)
 
-#plot lines of headline and core cpi
-ax1= fig.add_subplot(gs[0])
-ax1.plot(df_yoy.index, df_yoy['Headline_CPI'], color=headline_color, lw=1.8, label='Headline (YoY)', zorder=3)
-ax1.plot(df_yoy.index, df_yoy['Core_CPI'], color=core_color, lw=1.8, label='Core (YoY)', zorder=3)
-#add band indicating snb price stability range
+# to make the shocks from pandemic and energy crisis more visible, plot YoY changes:
+# calc yoy changes and ensure we have clean data for the distribution fit
+df_yoy = df[['Headline_CPI', 'Core_CPI']].pct_change(12).dropna() * 100
+
+# create figure
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7), dpi=100)
+
+# --- PANEL A: TIME SERIES ---
+ax1.plot(df_yoy.index, df_yoy['Headline_CPI'], color=headline_color, lw=1.5, label='Headline (YoY)', zorder=3)
+ax1.plot(df_yoy.index, df_yoy['Core_CPI'], color=core_color, lw=1.5, label='Core (YoY)', zorder=3)
+
+# add band indicating snb price stability range
 ax1.axhspan(0, 2, color='#E8F5E9', alpha=0.4, label='SNB Price Stability Range', zorder=1)
 ax1.axhline(0, color='#333333', lw=1, ls='--', zorder=2)
-#set titles and labels
-ax1.set_title('Inflation Volatility and Tail Risk Periods', fontsize=18, fontweight='bold', loc='left', pad=25)
+
+# titles and labels
+ax1.set_title('Panel A: Inflation YoY Changes', fontsize=14, fontweight='bold', loc='center')
 ax1.set_ylabel('Inflation Rate (YoY %)', fontweight='bold', fontsize=11)
-ax1.set_xlabel('Year', fontweight='bold', fontsize=11)
-#styling
-ax1.legend(loc='upper left', frameon=True, facecolor='white', framealpha=0.9)
+ax1.set_xlabel('Date', fontweight='bold', fontsize=11)
+ax1.legend(loc='upper left', frameon=True, fontsize=9)
 ax1.set_ylim(-2.5, 4.5)
-#calc kde for both series and plot on the side
-ax2 = fig.add_subplot(gs[1], sharey=ax1)
-sns.kdeplot(y=df_yoy['Headline_CPI'], ax=ax2, fill=True, color=headline_color, alpha=0.3, linewidth=1.5)
-sns.kdeplot(y=df_yoy['Core_CPI'], ax=ax2, fill=True, color=core_color, alpha=0.3, linewidth=1.5)
-#labels and styling
-ax2.set_xlabel('Frequency Density', fontweight='bold', fontsize=11)
-ax2.set_ylabel('')  #minimalism: only have 1 y axis label
-ax2.tick_params(axis='y', labelleft=False)
-for spine in ['top', 'right', 'left']:  #clean spines
-    ax2.spines[spine].set_visible(False)
-ax2.grid(axis='x', alpha=0.3)
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/YoY_CPI_w_distrib.png"
+
+# --- PANEL B: DISTRIBUTION OF YOY CHANGES ---
+# using more bins (50) makes the 'Säulen' thinner so outliers (tails) stand out
+ax2.hist(df_yoy['Headline_CPI'], bins=50, color=headline_color, alpha=0.35, 
+         edgecolor='black', linewidth=0.3, density=True, label='Headline Dist.')
+ax2.hist(df_yoy['Core_CPI'], bins=50, color=core_color, alpha=0.35, 
+         edgecolor='black', linewidth=0.3, density=True, label='Core Dist.')
+
+# To show fat tails, we fit the normal curve to the data's parameters
+# Calculating for Headline as the primary benchmark for tail risk
+mu, sigma = df_yoy['Headline_CPI'].mean(), df_yoy['Headline_CPI'].std()
+x = np.linspace(df_yoy['Headline_CPI'].min() - 1, df_yoy['Headline_CPI'].max() + 1, 200)
+y = stats.norm.pdf(x, mu, sigma)
+
+# plot the theoretical normal distribution
+ax2.plot(x, y, color='#333333', linewidth=2, linestyle='--', label='Normal Distribution (Headline Fit)')
+
+# fix titles and axis labels to match your requirements
+ax2.set_title('Panel B: Distribution of YoY Changes', fontsize=14, fontweight='bold', loc='center')
+ax2.set_xlabel('Inflation Rate (YoY %)', fontweight='bold', fontsize=11)
+ax2.set_ylabel('Probability Density', fontweight='bold', fontsize=11)
+ax2.legend(loc='upper right', frameon=True, fontsize=9)
+
+# add subtle grid for scannability
+ax1.grid(alpha=0.2)
+ax2.grid(alpha=0.2)
+
+plt.tight_layout()
+
+# save result
+save_name = f"Code/Scripts/Plots_and_Tables/02_eda_raw/YoY_CPI_w_Distribution.png"
 plt.savefig(save_name, dpi=300)
-
-
 
 
 #time series plot for all predictors:

@@ -101,7 +101,7 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     #capture loading matrix (variables x factors)
     loadings=pd.DataFrame(pca.components_.T, index=pca_cols, columns=[f"Factor_{i+1}" for i in range(r)])
     #def output path for components of the factors
-    out_path = Path("Results/Factor_Summaries/Factor_Summary_QRF_Default_LFeat_PCA.csv")
+    out_path = Path("Results/Factor_Summaries/Factor_Summary_Independent_NIW_PCA.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     #initialize dict to get summary what factor contains what
     factor_details = []

@@ -3,7 +3,7 @@ import glob
 import os
 
 #define paths to  specific results folders (benchmarks and model variations)
-folders=['Results/Data_experiments_benchmark','Results/Data_experiments_bvar', 'Results/Data_experiments_bvar2', 'Results/Data_experiments_qrf', 'Results/Data_experiments_qrf2']
+folders=[ 'Results/Data_experiments_bvar2']
 all_results = []  #initialize list to store dictionary of metrics
 #iterate through each experiment folder to collect results
 for folder in folders:
@@ -17,8 +17,8 @@ for folder in folders:
         #load  results dataframe
         df=pd.read_csv(path)
         #calculate mean scores and PIT statistics to compare method performance
-        metrics = {'Folder': folder.split('/')[-1], 'File': file_name, 'Mean_Empirical_CRPS': df['Empirical_CRPS'].mean(),
-            'Mean_Parametric_CRPS': df['Parametric_CRPS'].mean(), 'PIT_Mean': df['PIT'].mean(), 'PIT_Std': df['PIT'].std()}
+        metrics = {'Folder': folder.split('/')[-1], 'File': file_name, 'Mean_Parametric_CRPS_direct': df['CRPS_direct_parametric'].mean(), 
+                   'Mean_Parametric_CRPS_YOY': df['CRPS_YoY_timesafe_parametric'].mean(), 'PIT_Mean': df['PIT_direct'].mean(), 'PIT_Std': df['PIT_direct'].std()}
         #append metrics to  results list
         all_results.append(metrics)
 
@@ -28,4 +28,4 @@ summary_df=pd.DataFrame(all_results)
 print(summary_df.to_string(index=False))
 #define output path for the summary table (to be used for paper tables)
 save_name=f"Scripts/Plots_and_Tables/06a_mean_metrics_table.csv"
-summary_df.to_csv(save_name) 
+#summary_df.to_csv(save_name) 

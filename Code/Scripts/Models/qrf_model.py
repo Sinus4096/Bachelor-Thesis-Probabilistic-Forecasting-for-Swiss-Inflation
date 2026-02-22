@@ -191,81 +191,121 @@ def run_experiment(config):
                 #predict dense grid for CRPS and fan charts
                 eval_quantiles= np.linspace(0.01, 0.99, 99)
                 preds_dense = model.predict(X_test, quantiles=list(eval_quantiles))
-                #add linear part if residual forecasting
-                preds_plot+= 0
-                preds_dense+= 0
+                
+                #direct target eval
+                #--------------------
+                actual_direct = df.loc[forecast_date, target_col]
+
+                if pd.isna(actual_direct):
+                    current_idx += 1
+                    continue
+
+                # fit skew-t to model distribution
+                y_fit_direct = preds_dense.flatten()
+                skew_params_direct = fit_skew_t(y_fit_direct, eval_quantiles)
+
+                # parametric CRPS (MAIN METRIC)
+                crps_direct = calculate_crps(actual_direct, skew_params_direct)
+                #to see effect of fitting and smoothing, also calc empirical crps:
+                crps_direct_empirical= calculate_crps_quantile([actual_direct], preds_dense, eval_quantiles)
+
+                # PIT
+                pit_direct = nct.cdf(
+                    actual_direct,
+                    skew_params_direct[0],
+                    skew_params_direct[1],
+                    loc=skew_params_direct[2],
+                    scale=skew_params_direct[3],
+                )
+
+                rmse_direct = calculate_rmse(actual_direct, preds_plot[0,2])
                 #calculate shapley values for the qrf tree part
                 shap_tree= shap_values(model, X_test, X_train=X_train,model_type='tree')
                 #initialize dict for combined shap values if residual forecasting, if no residual, just the tree one
-                shap_combined= shap_tree.copy()           
-                T = target_date
+                shap_combined= shap_tree.copy()   
+                final_shap = {f"SHAP_{k}": float(np.asarray(v).squeeze()) for k, v in shap_combined.items()}        
                 #check if target date exists in df_yoy (if not, cannot evaluate)
                 if target_date not in df_yoy.index:
                     current_idx += 1
                     continue
                 
                 else:
-                    if h == 12:
-                        # For 12m horizon, do NOT reconstruct using levels with pub lag,
-                        # because lower = T-12 = t is not observed at time t when pub_lag>0.
-                        preds_dense_yoy = preds_dense.copy()
-                        preds_plot_yoy  = preds_plot.copy()
-                        scaling_factor  = 1.0
-                        base_effect     = 0.0
-                    else:
-                        pub_lag = 2
-                        lower = T - pd.DateOffset(months=12)
-                        last_known_date = forecast_date - pd.DateOffset(months=pub_lag)
+                    # =========================
+                    # (B) EX-POST YOY (PLOTS ONLY)
+                    # =========================
+                    T = target_date
 
-                        # availability checks (evaluation still uses df_yoy at T, that's fine ex post)
-                        if (last_known_date not in df_yoy.index) or (lower not in df_yoy.index) or (T not in df_yoy.index):
-                            current_idx += 1
-                            continue
-
-                        # base effect uses last-known published level at origin
-                        p_known = np.log(df_yoy.loc[last_known_date, yoy_raw])  # P_{t-2}
-                        p_low   = np.log(df_yoy.loc[lower, yoy_raw])            # P_{t+h-12}
-                        base_effect = 100.0 * (p_known - p_low)
-
-                        scaling_factor = h / 12.0  # model predicts annualized h-month change
-                        preds_dense_yoy = base_effect + preds_dense * scaling_factor
-                        preds_plot_yoy  = base_effect + preds_plot  * scaling_factor
-
-                    actual_val = df_yoy.loc[T, yoy_col]
-                    #secure so for last cols
-                    if pd.isna(actual_val):
+                    if (T not in df_yoy.index) or (forecast_date not in df_yoy.index):
                         current_idx += 1
-                        continue                        
-                    #initialize dict to store shap values for this forecast
-                    final_shap={}
-                    #apply scaling to shap values if 
-                    final_shap['Shap_Base_Effect'] = base_effect
-                    #loop through the combined shap values and apply scaling to the tree part (linear part already in original units)
-                    for k, v in shap_combined.items():
-                        final_shap[k]=v*scaling_factor
-                    #calc rmse to tell whether model that is better in probabilistic terms also better in point forecast terms (call on median), average later
-                    sq_error= calculate_rmse(actual_val, preds_plot_yoy[0,2])
-                    #flatten to 1D array to fit distribution later
-                    y_fit_data=preds_dense_yoy.flatten()
-                    
+                        continue
 
-                    skew_params=fit_skew_t(y_fit_data, eval_quantiles)  #fit skew-t, get params by the 99 points
-                        
-                    #calc PIT (for plotting later): cdf of actual value under fitted skew-t
-                    pit_val= nct.cdf(actual_val, skew_params[0], skew_params[1], loc=skew_params[2], scale=skew_params[3])
-                    #calc step-specific CRPS for skew-t
-                    parametric_crps=calculate_crps(actual_val, skew_params)
-                    #get params for plotting later
-                    dist_params= {'df': skew_params[0], 'nc': skew_params[1], 'loc': skew_params[2], 'scale': skew_params[3]}
-                    #want to calc empirical crpsto see how much smoothing the skew-t or KDE fit changed the result
-                    empirical_crps= calculate_crps_quantile([actual_val], preds_dense_yoy, eval_quantiles)
+                    actual_yoy = df_yoy.loc[T, yoy_col]
+                    if pd.isna(actual_yoy):
+                        current_idx += 1
+                        continue
+
+                    lower = T - pd.DateOffset(months=12)
+                    if lower not in df_yoy.index:
+                        current_idx += 1
+                        continue
+
+                    p_t   = np.log(df_yoy.loc[forecast_date, yoy_raw])   # ex-post anchor
+                    p_low = np.log(df_yoy.loc[lower, yoy_raw])
+
+                    base_effect_expost = 100.0 * (p_t - p_low)
+
+                    scaling = h / 12.0
+                    preds_plot_yoy_expost  = base_effect_expost + preds_plot * scaling
+                    preds_dense_yoy_expost = base_effect_expost + preds_dense * scaling
+
+
+                    # =========================
+                    # (C) TIME-SAFE YoY CRPS (SNB comparable)
+                    # =========================
+                    pub_lag = 2
+                    t_known = forecast_date - pd.DateOffset(months=pub_lag)
+                    lower_known = T - pd.DateOffset(months=12)
+
+                    crps_yoy_timesafe_parametric = np.nan
+
+                    if (t_known in df_yoy.index) and (lower_known in df_yoy.index):
+
+                        p_known = np.log(df_yoy.loc[t_known, yoy_raw])
+                        p_low   = np.log(df_yoy.loc[lower_known, yoy_raw])
+
+                        base_effect_timesafe = 100.0 * (p_known - p_low)
+
+                        preds_dense_yoy_timesafe = base_effect_timesafe + preds_dense * scaling
+
+                        # skew-t fit (IMPORTANT — same as BVAR)
+                        skew_params_yoy = fit_skew_t(preds_dense_yoy_timesafe.flatten(), eval_quantiles)
+
+                        crps_yoy_timesafe_parametric = calculate_crps(actual_yoy, skew_params_yoy)
                     #make dic of result
-                    result={'Date':forecast_date, 'Target_date': target_date, 'Actual': actual_val, 'Forecast_median': preds_plot_yoy[0,2],'q05': preds_plot_yoy[0,0],
-                            'q16':preds_plot_yoy[0,1], 'q84': preds_plot_yoy[0, 3],'q95': preds_plot_yoy[0, 4], 'Squared_Error': sq_error, 'Empirical_CRPS': empirical_crps, 'Parametric_CRPS': parametric_crps,
-                            'df_skewt': dist_params['df'], 'nc_skewt': dist_params['nc'], 'loc_skewt': dist_params['loc'], 'scale_skewt': dist_params['scale'], 'PIT': pit_val}
-                    #add shapley values to the result dictionary
+                    result = {
+                        'Date': forecast_date,
+                        'Target_date': target_date,
+
+                        # (A) main evaluation
+                        'Actual_direct': actual_direct,
+                        'Forecast_median_direct': preds_plot[0, 2],
+                        'CRPS_direct_parametric': crps_direct,
+                        'CRPS_direct_empirical': crps_direct_empirical,
+                        'RMSE_direct': rmse_direct,
+                        'PIT': pit_direct,
+
+                        # (B) ex-post YoY for plots
+                        'Actual_YoY': actual_yoy,
+                        'Forecast_median_YoY': preds_plot_yoy_expost[0, 2],
+                        'q05_YoY': preds_plot_yoy_expost[0, 0],
+                        'q16_YoY': preds_plot_yoy_expost[0, 1],
+                        'q84_YoY': preds_plot_yoy_expost[0, 3],
+                        'q95_YoY': preds_plot_yoy_expost[0, 4],
+
+                        # (C) optional SNB-comparable-ish metric (time-safe, no bridge)
+                        'CRPS_YoY_timesafe': crps_yoy_timesafe_parametric,
+                    }
                     result.update(final_shap)
-                    #append
                     recursive_preds.append(result)
                 #advance window 1month
                 current_idx+=1
