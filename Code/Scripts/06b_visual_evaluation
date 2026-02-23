@@ -38,6 +38,28 @@ PCA_FACTOR_FILES= {
 }
 
 
+# -----------------------------
+# Column aliases (NEW SCHEMA)
+# -----------------------------
+# Use YoY columns for evaluation/plots (matches data_yoy.csv)
+ACTUAL_COL = "Actual_YoY"
+MEDIAN_COL = "Forecast_median_YoY"
+
+# Quantiles (YoY)
+Q05_COL = "q05_YoY"
+Q16_COL = "q16_YoY"
+Q84_COL = "q84_YoY"
+Q95_COL = "q95_YoY"
+
+# PIT + CRPS (new names)
+PIT_COL = "PIT_direct"
+crps_col = "CRPS_YoY_timesafe_parametric"   # overrides your previous "Parametric_CRPS"
+
+# SHAP (new prefix + base/constant columns)
+SHAP_PREFIX = "SHAP_"
+SHAP_BASE_COL = "BaseEffect_YoY_expost"     # base effect in your new files
+SHAP_EXCLUDE = {SHAP_BASE_COL, "SHAP_Shap_Constant"}  # exclude constant from feature ranking/heatmaps
+
 #helpers
 #-----------
 #compiled regex for extracting monthly horizon from strings
@@ -190,31 +212,27 @@ def load_actuals(actuals_path: Path, data_type: str) ->pd.Series:
     #return specific column (Core/Headline) as numeric series
     return pd.to_numeric(df[data_type], errors="coerce")
 
-def load_forecast(path: Path, actuals: pd.Series) ->pd.DataFrame:
-    #load model forecast results from disk
-    df= pd.read_csv(path)
-    #verify required columns exist for merging with actuals
+def load_forecast(path: Path, actuals: pd.Series) -> pd.DataFrame:
+    df = pd.read_csv(path)
+
     for c in ["Date", "Target_date"]:
         if c not in df.columns:
-            #abort if file structure is unexpected
             raise ValueError(f"{path.name}: missing required column '{c}'")
-    #ensure date formats match for index joining
-    df["Date"]= pd.to_datetime(df["Date"])
-    df["Target_date"]= pd.to_datetime(df["Target_date"])
-    #map ground truth values using target date as key
-    gt= df["Target_date"].map(actuals)
-    #handle cases where actuals column might already exist in results
-    if "Actual" in df.columns:
-        #fill missing actuals from ground truth series
-        df["Actual"]= np.where(gt.notna(), gt, pd.to_numeric(df["Actual"], errors="coerce"))
-    else:
-        #create new actuals column from ground truth
-        df["Actual"]= gt
 
-    #sort by horizon and origin date for consistency
-    df= df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
-    #set target date as primary index for evaluation
-    df= df.set_index("Target_date").sort_index()
+    df["Date"] = pd.to_datetime(df["Date"])
+    df["Target_date"] = pd.to_datetime(df["Target_date"])
+
+    # Map ground truth YoY actuals onto target_date
+    gt = df["Target_date"].map(actuals)
+
+    # Write into the NEW actual column (YoY)
+    if ACTUAL_COL in df.columns:
+        df[ACTUAL_COL] = np.where(gt.notna(), gt, pd.to_numeric(df[ACTUAL_COL], errors="coerce"))
+    else:
+        df[ACTUAL_COL] = gt
+
+    df = df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
+    df = df.set_index("Target_date").sort_index()
     return df
 
 
@@ -222,19 +240,23 @@ def load_forecast(path: Path, actuals: pd.Series) ->pd.DataFrame:
 #--------------
 
 def shap_columns(df: pd.DataFrame) -> List[str]:
-    #filter columns to find shapley value contributions
-    return [c for c in df.columns if c.startswith("Shap_") and c != "Shap_Base_Effect"]
+    # all SHAP cols except excluded ones
+    return [c for c in df.columns if c.startswith(SHAP_PREFIX) and c not in SHAP_EXCLUDE]
 
 def shap_suffix(col: str) -> str:
-    #strip prefix to get clean variable name
-    return col.replace("Shap_", "", 1)
+    # strip SHAP_ and also flatten any legacy nested prefix like "Shap_"
+    s = col
+    if s.startswith(SHAP_PREFIX):
+        s = s.replace(SHAP_PREFIX, "", 1)
+    s = s.replace("Shap_", "")  # handles your example: SHAP_Shap_Constant
+    return s
 
 
 
 # PCA-> variable backprojection
 #---------------------------------------
 #regex to identify factor-based shap columns from pca models
-pca_factor_re= re.compile(r"^Shap_(Factor_\d+)$", re.IGNORECASE)
+pca_factor_re = re.compile(r"^SHAP_(Factor_\d+)$", re.IGNORECASE)
 
 def load_pca_weights(path: Path) -> pd.DataFrame:
     #read weights file mapping factors back to raw variables
@@ -310,7 +332,7 @@ def project_factor_shap_to_variables(df: pd.DataFrame, pca_w: pd.DataFrame, targ
     #initialize columns for all underlying variables
     variables= list(w_piv.columns)
     for var in variables:
-        col= f"Shap_{var}"
+        col = f"{SHAP_PREFIX}{var}"
         if col not in out.columns:
             #default to zero before projection
             out[col]= 0.0
@@ -346,20 +368,16 @@ def project_factor_shap_to_variables(df: pd.DataFrame, pca_w: pd.DataFrame, targ
 
         #update output dataframe with projected values
         for j, var in enumerate(variables):
-            out.iat[i, out.columns.get_loc(f"Shap_{var}")]= proj[j]
+            out.iat[i, out.columns.get_loc(f"{SHAP_PREFIX}{var}")]= proj[j]
     return out
 
 
 #feature importance + heatmap column selection
 #-------------------------
 def get_projected_feature_shap_cols(df: pd.DataFrame) -> list[str]:
-    """all SHAP cols excluding Factor_k and excluding Base_Effect."""
-    #get all columns containing shapley values
-    cols= [c for c in df.columns if c.startswith("Shap_")]
-    #filter out base effect which is not specific feature contribution
-    cols= [c for c in cols if c != "Shap_Base_Effect" and c != "Shap_Base_Effect".lower()]
-    #ensure factor columns are removed to only show projected raw variables
-    return [c for c in cols if not pca_factor_re.match(c) and c != "Shap_Base_Effect"]
+    cols = [c for c in df.columns if c.startswith(SHAP_PREFIX) and c not in SHAP_EXCLUDE]
+    # remove factor-level cols (keep projected raw-variable cols only)
+    return [c for c in cols if not pca_factor_re.match(c)]
 
 def shap_feature_importance(df: pd.DataFrame) -> pd.DataFrame:
     #retrieve clean list of feature-based shap columns
@@ -453,33 +471,27 @@ def plot_fan_chart_grid(data: Dict[str, Dict[int, pd.DataFrame]], models_compare
             ax.grid(True, alpha=0.2)
 
             #handle missing data scenarios in grid
-            if df is None or MED_COL not in df.columns:
+            if df is None or MEDIAN_COL not in df.columns:
                 ax.text(0.5, 0.5, "No median", ha="center", va="center")
                 continue
 
-            #convert median and actuals to numeric series
-            med= pd.to_numeric(df[MED_COL], errors="coerce")
-            act= pd.to_numeric(df["Actual"], errors="coerce") if "Actual" in df.columns else None
+            med = pd.to_numeric(df[MEDIAN_COL], errors="coerce")
+            act = pd.to_numeric(df[ACTUAL_COL], errors="coerce") if ACTUAL_COL in df.columns else None
 
-            #plot realization line if available
             if act is not None:
                 ax.plot(act.index, act.values, linewidth=2.0, label="Actual")
 
-            #plot median forecast line
             ax.plot(med.index, med.values, linewidth=2.0, label="Median")
 
-            #plot inner uncertainty band (68% coverage)
-            if all(c in df.columns for c in ["q16", "q84"]):
-                q16= pd.to_numeric(df["q16"], errors="coerce")
-                q84= pd.to_numeric(df["q84"], errors="coerce")
+            if all(c in df.columns for c in [Q16_COL, Q84_COL]):
+                q16 = pd.to_numeric(df[Q16_COL], errors="coerce")
+                q84 = pd.to_numeric(df[Q84_COL], errors="coerce")
                 ax.fill_between(q16.index, q16.values, q84.values, alpha=0.20, label="16–84")
 
-            #plot outer uncertainty band (90% coverage)
-            if all(c in df.columns for c in ["q05", "q95"]):
-                q05= pd.to_numeric(df["q05"], errors="coerce")
-                q95= pd.to_numeric(df["q95"], errors="coerce")
+            if all(c in df.columns for c in [Q05_COL, Q95_COL]):
+                q05 = pd.to_numeric(df[Q05_COL], errors="coerce")
+                q95 = pd.to_numeric(df[Q95_COL], errors="coerce")
                 ax.fill_between(q05.index, q05.values, q95.values, alpha=0.12, label="05–95")
-
             #place legend only in first subplot to reduce clutter
             if i== 0 and j== 0:
                 ax.legend(loc="upper left")
@@ -830,11 +842,11 @@ def main() -> None:
             if i == len(horizons) - 1:
                 ax.set_xlabel("PIT")
 
-            if df is None or "PIT" not in df.columns:
+            if df is None or PIT_COL not in df.columns:
                 ax.text(0.5, 0.5, "No PIT", ha="center", va="center")
                 continue
 
-            pit = pd.to_numeric(df["PIT"], errors="coerce").dropna().clip(0, 1).values
+            pit = pd.to_numeric(df[PIT_COL], errors="coerce").dropna().clip(0, 1).values
             if pit.size < 5:
                 ax.text(0.5, 0.5, "Too few PITs", ha="center", va="center")
                 continue

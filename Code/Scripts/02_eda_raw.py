@@ -92,26 +92,27 @@ ax1.legend(loc='upper left', frameon=True, fontsize=9)
 ax1.set_ylim(-2.5, 4.5)
 
 # --- PANEL B: DISTRIBUTION OF YOY CHANGES ---
-# using more bins (50) makes the 'Säulen' thinner so outliers (tails) stand out
-ax2.hist(df_yoy['Headline_CPI'], bins=50, color=headline_color, alpha=0.35, 
-         edgecolor='black', linewidth=0.3, density=True, label='Headline Dist.')
-ax2.hist(df_yoy['Core_CPI'], bins=50, color=core_color, alpha=0.35, 
-         edgecolor='black', linewidth=0.3, density=True, label='Core Dist.')
+# Thinner bars help reveal small tail outliers
+ax2.hist(df_yoy['Headline_CPI'], bins=50, color=headline_color, alpha=0.3, 
+         edgecolor='black', linewidth=0.2, density=True, label='Headline Dist.')
+ax2.hist(df_yoy['Core_CPI'], bins=50, color=core_color, alpha=0.3, 
+         edgecolor='black', linewidth=0.2, density=True, label='Core Dist.')
 
-# To show fat tails, we fit the normal curve to the data's parameters
-# Calculating for Headline as the primary benchmark for tail risk
-mu, sigma = df_yoy['Headline_CPI'].mean(), df_yoy['Headline_CPI'].std()
-x = np.linspace(df_yoy['Headline_CPI'].min() - 1, df_yoy['Headline_CPI'].max() + 1, 200)
-y = stats.norm.pdf(x, mu, sigma)
+# Fit Normal for Headline
+mu_h, std_h = df_yoy['Headline_CPI'].mean(), df_yoy['Headline_CPI'].std()
+x_h = np.linspace(df_yoy['Headline_CPI'].min() - 1, df_yoy['Headline_CPI'].max() + 1, 200)
+ax2.plot(x_h, stats.norm.pdf(x_h, mu_h, std_h), color=headline_color, lw=2, ls='--', label='Normal Fit (Headline)')
 
-# plot the theoretical normal distribution
-ax2.plot(x, y, color='#333333', linewidth=2, linestyle='--', label='Normal Distribution (Headline Fit)')
+# Fit Normal for Core
+mu_c, std_c = df_yoy['Core_CPI'].mean(), df_yoy['Core_CPI'].std()
+x_c = np.linspace(df_yoy['Core_CPI'].min() - 1, df_yoy['Core_CPI'].max() + 1, 200)
+ax2.plot(x_c, stats.norm.pdf(x_c, mu_c, std_c), color=core_color, lw=2, ls='--', label='Normal Fit (Core)')
 
-# fix titles and axis labels to match your requirements
-ax2.set_title('Panel B: Distribution of YoY Changes', fontsize=14, fontweight='bold', loc='center')
-ax2.set_xlabel('Inflation Rate (YoY %)', fontweight='bold', fontsize=11)
-ax2.set_ylabel('Probability Density', fontweight='bold', fontsize=11)
-ax2.legend(loc='upper right', frameon=True, fontsize=9)
+# Styling
+ax2.set_title('Panel B: Distribution of YoY Changes', fontsize=14, fontweight='bold')
+ax2.set_xlabel('Inflation Rate (YoY %)', fontweight='bold')
+ax2.set_ylabel('Probability Density', fontweight='bold')
+ax2.legend(loc='upper right', fontsize=8, framealpha=0.8)
 
 # add subtle grid for scannability
 ax1.grid(alpha=0.2)

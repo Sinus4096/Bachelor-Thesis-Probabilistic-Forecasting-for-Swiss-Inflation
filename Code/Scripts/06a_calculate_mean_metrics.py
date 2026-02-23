@@ -3,7 +3,7 @@ import glob
 import os
 
 #define paths to  specific results folders (benchmarks and model variations)
-folders=[ 'Results/Data_experiments_bvar2']
+folders=['Results/Data_experiments_benchmark' ,'Results/Data_experiments_bvar2', 'Results/Data_experiments_qrf2']
 all_results = []  #initialize list to store dictionary of metrics
 #iterate through each experiment folder to collect results
 for folder in folders:

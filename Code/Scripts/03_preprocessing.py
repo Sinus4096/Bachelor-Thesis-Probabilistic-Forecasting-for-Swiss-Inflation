@@ -59,12 +59,18 @@ print(nans_per_column)
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
-for i in [1]:
+for i in [1,2,3]:
     df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
     df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
 #df_stationary.drop(columns=['headline_1m', 'core_1m'], inplace=True)  #drop the 1-month growth rates as we only want the lags as features
 
+
+#--------------
+#add time index
+#-----------------
+# --- time index (trend feature) ---
+df_stationary["time_idx"] = np.arange(len(df_stationary))
 #--------------------------
 #add Cycle features: sine/consine transformations
 #--------------------------------

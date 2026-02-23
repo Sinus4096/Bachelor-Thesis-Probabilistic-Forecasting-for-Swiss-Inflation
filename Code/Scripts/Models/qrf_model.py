@@ -262,25 +262,42 @@ def run_experiment(config):
                     # =========================
                     # (C) TIME-SAFE YoY CRPS (SNB comparable)
                     # =========================
+                    # =========================
+                    # (C) TIME-SAFE YoY CRPS (SNB comparable)
+                    # =========================
                     pub_lag = 2
                     t_known = forecast_date - pd.DateOffset(months=pub_lag)
                     lower_known = T - pd.DateOffset(months=12)
 
                     crps_yoy_timesafe_parametric = np.nan
+                    crps_yoy_timesafe_empirical= np.nan
 
-                    if (t_known in df_yoy.index) and (lower_known in df_yoy.index):
-
+                    # 1. Properly define the time-safe predictions for all horizons
+                    if h == 12:
+                        preds_dense_yoy_timesafe = preds_dense.copy()
+                        
+                    elif (t_known in df_yoy.index) and (lower_known in df_yoy.index):
                         p_known = np.log(df_yoy.loc[t_known, yoy_raw])
                         p_low   = np.log(df_yoy.loc[lower_known, yoy_raw])
 
                         base_effect_timesafe = 100.0 * (p_known - p_low)
-
                         preds_dense_yoy_timesafe = base_effect_timesafe + preds_dense * scaling
+                    else:
+                        preds_dense_yoy_timesafe = None
 
-                        # skew-t fit (IMPORTANT — same as BVAR)
-                        skew_params_yoy = fit_skew_t(preds_dense_yoy_timesafe.flatten(), eval_quantiles)
+                    # 2. Fit the Skew-t and calculate CRPS ONLY if the prediction was successfully created
+                    if preds_dense_yoy_timesafe is not None:
+                        # preds_dense_yoy_timesafe should be shape (1, Q) or (Q,)
+                        yoy_q = np.asarray(preds_dense_yoy_timesafe).reshape(1, -1)
 
-                        crps_yoy_timesafe_parametric = calculate_crps(actual_yoy, skew_params_yoy)
+                        # Empirical CRPS from predicted quantiles (THIS is the right nonparametric score)
+                        crps_yoy_timesafe_empirical = float(np.mean(
+                            calculate_crps_quantile([actual_yoy], yoy_q, eval_quantiles)
+                        ))
+
+                        # Optional: parametric skew-t fit for reporting (can be worse than empirical)
+                        skew_params_yoy = fit_skew_t(yoy_q.flatten(), eval_quantiles)
+                        crps_yoy_timesafe_parametric = float(calculate_crps(actual_yoy, skew_params_yoy))
                     #make dic of result
                     result = {
                         'Date': forecast_date,
@@ -292,7 +309,11 @@ def run_experiment(config):
                         'CRPS_direct_parametric': crps_direct,
                         'CRPS_direct_empirical': crps_direct_empirical,
                         'RMSE_direct': rmse_direct,
-                        'PIT': pit_direct,
+                        'PIT_direct': pit_direct,
+                        'df_skewt_direct': float(skew_params_direct[0]),
+                        'nc_skewt_direct': float(skew_params_direct[1]),
+                        'loc_skewt_direct': float(skew_params_direct[2]),
+                        'scale_skewt_direct': float(skew_params_direct[3]),
 
                         # (B) ex-post YoY for plots
                         'Actual_YoY': actual_yoy,
@@ -301,9 +322,12 @@ def run_experiment(config):
                         'q16_YoY': preds_plot_yoy_expost[0, 1],
                         'q84_YoY': preds_plot_yoy_expost[0, 3],
                         'q95_YoY': preds_plot_yoy_expost[0, 4],
+                        'BaseEffect_YoY_expost': float(base_effect_expost),
 
                         # (C) optional SNB-comparable-ish metric (time-safe, no bridge)
-                        'CRPS_YoY_timesafe': crps_yoy_timesafe_parametric,
+                        
+                        'CRPS_YoY_timesafe_parametric': crps_yoy_timesafe_parametric,
+                        'CRPS_YoY_timesafe_empirical': crps_yoy_timesafe_empirical,
                     }
                     result.update(final_shap)
                     recursive_preds.append(result)

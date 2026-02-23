@@ -142,8 +142,12 @@ class BVAR:
         n_obs= len(data)
         
         #define want lags 0, 1
-        self.lag_indices =[0, 1]
-        max_lag= self.h+1  #biggest lag
+        pub_lag =2
+        #use information available at origin: t-2 and t-3
+        self.lag_indices = [pub_lag, pub_lag+1 ]
+
+        # must cover BOTH horizon shift and pub lag
+        max_lag = self.h+max(self.lag_indices)    # h + 3
         #if less obs than max lag +1 -> cannot create lagged features-> raise error
         if n_obs <= max_lag:
             raise ValueError(f"Data has {n_obs} rows, but Lag 12 requires at least 13 observations.")
@@ -458,14 +462,14 @@ class BVAR:
                     #get K and exog vars to adjust grid depending on features
                     K=self.n_features
                     exog=self.n_exog
-                    if horizon ==12 or horizon ==9:
-                        lambda_grid = [0.05, 0.07, 0.09, 0.1, 0.2, 0.3]
-                        theta_grid= [0.05, 0.1, 0.3, 0.5]
-                        decay_grid = [1.0, 1.5, 2.0]
-                    else:
-                        lambda_grid = [0.01, 0.03, 0.05, 0.07, 0.1]
-                        theta_grid= [0.01, 0.03, 0.05, 0.1]
-                        decay_grid = [1.0, 1.5, 2.0]
+                    #if horizon ==12 or horizon ==9:
+                     #   lambda_grid = [0.05, 0.07, 0.09, 0.1, 0.2, 0.3]
+                      #  theta_grid= [0.05, 0.1, 0.3, 0.5]
+                       # decay_grid = [1.0, 1.5, 2.0]
+                    
+                    lambda_grid = [0.01, 0.03, 0.05, 0.07, 0.1]
+                    theta_grid= [0.01, 0.03, 0.05, 0.1]
+                    decay_grid = [1.0, 1.5, 2.0]
                     start_eval = max(horizon + 24, int(0.6*len(data)))
                     step_tune = 4
                     n_draws_tune = 150
