@@ -101,7 +101,7 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     #capture loading matrix (variables x factors)
     loadings=pd.DataFrame(pca.components_.T, index=pca_cols, columns=[f"Factor_{i+1}" for i in range(r)])
     #def output path for components of the factors
-    out_path = Path("Results/Factor_Summaries/Factor_Summary_Independent_NIW_PCA.csv")
+    out_path = Path("Results/Factor_Summaries/Factor_Summary_bvar_independent_niw_PCA.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     #initialize dict to get summary what factor contains what
     factor_details = []
@@ -187,8 +187,7 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
         #no pca columns selected
         pca_cols=[] 
         #all features are treated as keep_cols
-        keep_cols= list(X_full.columns) 
-        
+        keep_cols= list(X_full.columns)         
     #check if horizon is long term (for choosing grid in config)
     if h>= 12: 
         #use higher alpha grid for long horizons (more regularization)
@@ -200,7 +199,6 @@ def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, 
     
     #initialize the standard scaler for feature normalization
     scaler= StandardScaler() 
-
     #loop through every time step in the dataframe: walk fwd approach so no data leakage
     for i in range(len(df)):         
         #define the end of the training window based on horizon h

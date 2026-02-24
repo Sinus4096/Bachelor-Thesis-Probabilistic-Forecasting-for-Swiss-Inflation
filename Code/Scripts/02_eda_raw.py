@@ -69,59 +69,63 @@ plt.savefig(save_name, dpi=300)
 #indicating a period of sharper inflation in recent years.
 
 
-# to make the shocks from pandemic and energy crisis more visible, plot YoY changes:
-# calc yoy changes and ensure we have clean data for the distribution fit
-df_yoy = df[['Headline_CPI', 'Core_CPI']].pct_change(12).dropna() * 100
+#to make shocks from pandemic and energy crisis more visible, plot yoy changes:
+#calc yoy changes and ensure we have clean data for distribution fit
+df_yoy= df[['Headline_CPI', 'Core_CPI']].pct_change(12).dropna() * 100
+#create figure for dual panel visualization
+fig, (ax1, ax2)= plt.subplots(1, 2, figsize=(15, 7), dpi=100)
 
-# create figure
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7), dpi=100)
-
-# --- PANEL A: TIME SERIES ---
+#PANEL A
+#plot headline inflation time series
 ax1.plot(df_yoy.index, df_yoy['Headline_CPI'], color=headline_color, lw=1.5, label='Headline (YoY)', zorder=3)
+#plot core inflation time series
 ax1.plot(df_yoy.index, df_yoy['Core_CPI'], color=core_color, lw=1.5, label='Core (YoY)', zorder=3)
-
-# add band indicating snb price stability range
+#add band indicating snb price stability range (0-2%)
 ax1.axhspan(0, 2, color='#E8F5E9', alpha=0.4, label='SNB Price Stability Range', zorder=1)
+#add zero line for reference
 ax1.axhline(0, color='#333333', lw=1, ls='--', zorder=2)
-
-# titles and labels
+#titles and labels for time series panel
 ax1.set_title('Panel A: Inflation YoY Changes', fontsize=14, fontweight='bold', loc='center')
 ax1.set_ylabel('Inflation Rate (YoY %)', fontweight='bold', fontsize=11)
 ax1.set_xlabel('Date', fontweight='bold', fontsize=11)
+#place legend in top left corner
 ax1.legend(loc='upper left', frameon=True, fontsize=9)
+#set y-axis limits to capture pandemic shocks
 ax1.set_ylim(-2.5, 4.5)
 
-# --- PANEL B: DISTRIBUTION OF YOY CHANGES ---
-# Thinner bars help reveal small tail outliers
-ax2.hist(df_yoy['Headline_CPI'], bins=50, color=headline_color, alpha=0.3, 
-         edgecolor='black', linewidth=0.2, density=True, label='Headline Dist.')
-ax2.hist(df_yoy['Core_CPI'], bins=50, color=core_color, alpha=0.3, 
-         edgecolor='black', linewidth=0.2, density=True, label='Core Dist.')
+#PANEL B
+#thinner bars help reveal small tail outliers in inflation data
+ax2.hist(df_yoy['Headline_CPI'], bins=50, color=headline_color, alpha=0.3, edgecolor='black', linewidth=0.2, density=True, label='Headline Dist.')
+#overlay histogram for core inflation
+ax2.hist(df_yoy['Core_CPI'], bins=50, color=core_color, alpha=0.3, edgecolor='black', linewidth=0.2, density=True, label='Core Dist.')
 
-# Fit Normal for Headline
-mu_h, std_h = df_yoy['Headline_CPI'].mean(), df_yoy['Headline_CPI'].std()
-x_h = np.linspace(df_yoy['Headline_CPI'].min() - 1, df_yoy['Headline_CPI'].max() + 1, 200)
+#fit normal for headline to check for fat tails
+mu_h, std_h= df_yoy['Headline_CPI'].mean(), df_yoy['Headline_CPI'].std()
+#generate x-range for headline normal curve
+x_h= np.linspace(df_yoy['Headline_CPI'].min() - 1, df_yoy['Headline_CPI'].max() + 1, 200)
+#plot normal density for headline
 ax2.plot(x_h, stats.norm.pdf(x_h, mu_h, std_h), color=headline_color, lw=2, ls='--', label='Normal Fit (Headline)')
-
-# Fit Normal for Core
-mu_c, std_c = df_yoy['Core_CPI'].mean(), df_yoy['Core_CPI'].std()
-x_c = np.linspace(df_yoy['Core_CPI'].min() - 1, df_yoy['Core_CPI'].max() + 1, 200)
+#fit normal for core
+mu_c, std_c= df_yoy['Core_CPI'].mean(), df_yoy['Core_CPI'].std()
+#generate x-range for core normal curve
+x_c= np.linspace(df_yoy['Core_CPI'].min() - 1, df_yoy['Core_CPI'].max() + 1, 200)
+#plot normal density for core
 ax2.plot(x_c, stats.norm.pdf(x_c, mu_c, std_c), color=core_color, lw=2, ls='--', label='Normal Fit (Core)')
 
-# Styling
+#styling for distribution panel
 ax2.set_title('Panel B: Distribution of YoY Changes', fontsize=14, fontweight='bold')
 ax2.set_xlabel('Inflation Rate (YoY %)', fontweight='bold')
 ax2.set_ylabel('Probability Density', fontweight='bold')
+#add legend with high alpha for readability
 ax2.legend(loc='upper right', fontsize=8, framealpha=0.8)
-
-# add subtle grid for scannability
+#add subtle grid for scannability across both panels
 ax1.grid(alpha=0.2)
 ax2.grid(alpha=0.2)
-
+#optimize spacing between subplots
 plt.tight_layout()
-
-# save result
-save_name = f"Code/Scripts/Plots_and_Tables/02_eda_raw/YoY_CPI_w_Distribution.png"
+#save result to eda folder
+save_name= f"Code/Scripts/Plots_and_Tables/02_eda_raw/YoY_CPI_w_Distribution.png"
+#save with high dpi for paper quality
 plt.savefig(save_name, dpi=300)
 
 
@@ -196,29 +200,32 @@ print(df_summary.to_string(index=False))
 
 
 #--------------------------------------------
-#outlier inspection
-#--------------------------------------------
-numeric_df= df.select_dtypes(include=['number'])  #select numeric columns
-    
+#outlier inspection & descriptive stats
+#-------------------------------------------------------
+numeric_df= df.select_dtypes(include=['number'])  #select numeric columns    
 #calc IQR
 Q1= numeric_df.quantile(0.25)
-Q3=numeric_df.quantile(0.75)
-IQR=Q3-Q1
+Q3= numeric_df.quantile(0.75)
+IQR= Q3-Q1
 #def bounds
-lower_bound=Q1- 1.5*IQR
-upper_bound =Q3+1.5*IQR
+lower_bound= Q1-1.5*IQR
+upper_bound= Q3+1.5*IQR
 #initialize table with descriptive stats
 stats= df.describe().T
+
+#skewness and kurtosis for each column
+stats['skew']= numeric_df.skew()
+stats['kurtosis']= numeric_df.kurt() 
 #count outliers per column: only extreme outliers beyond 3*IQR
-outliers=((numeric_df <(Q1-3.0*IQR))|(numeric_df>(Q3 +3.0*IQR))).sum()
+outliers= ((numeric_df<(Q1-3.0*IQR))|(numeric_df>(Q3+3.0*IQR))).sum()
 stats['extreme_outliers']= outliers
-stats['outlier_pct'] =(outliers/ len(df) *100).round(2).astype(str)+'%'
+stats['outlier_pct']= (outliers/len(df)*100).round(2).astype(str)+'%'
 #want 4 decimals
-pd.options.display.float_format ='{:.4f}'.format   
-#reorder cols
-cols= ['mean', 'std', 'min', '50%', 'max', 'extreme_outliers', 'outlier_pct']
+pd.options.display.float_format= '{:.4f}'.format   
+#reorder cols to include new metrics
+cols= ['mean','std','min','50%','max','skew','kurtosis','extreme_outliers','outlier_pct']
 #print
-save_name=f"Code/Scripts/Plots_and_Tables/02_eda_raw/stats_and_outlier_insp.csv"
+save_name= f"Code/Scripts/Plots_and_Tables/02_eda_raw/stats_and_outlier_insp.csv"
 stats[cols].to_csv(save_name) 
 print(stats[cols])
 
@@ -227,7 +234,7 @@ print(stats[cols])
 #probably will need to standardize the data especially for feature importance of qrf and for config with ridge regression
 
 #from now on to prevent data leakage, only use data from 2015 onwards (training data)
-df= df.loc[:'2013-07-01']
+df= df.loc[:'2012-07-01']
 
 #---------------------------------------
 #Check For Correlation

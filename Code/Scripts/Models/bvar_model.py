@@ -58,385 +58,326 @@ def run_experiment(config):
     initial_prior_params = model_conf.get('params', {})
     #get whether will use pca factors or not
     use_pca_factors = bool(config.get("model", {}).get("use_pca_factors", False))
-    
+            
     #iterate to get right target col
-# ... inside run_experiment ...
-
-    # 1. Loop Horizons
-    for h in horizons:
-        
-        # 2. Loop Targets (Target-wise!)
-        for target_name in target_names:  # e.g., target_name = "Core"
-            
-            # --- DEFINE VARIABLES ---
-            # The specific column string: "target_core_12m"
-            target_col_str = f"target_{target_name.lower()}_{h}m"
-            
-            # The list version (needed for pandas slicing and PCA dropping): ["target_core_12m"]
-            target_col_list = [target_col_str] 
-            
-            # --- FIX 1: Check existence using the STRING ---
+    for h in horizons:        
+        #loop targets target-wise for current horizon
+        for target_name in target_names:  
+            #specific column string for target identification
+            target_col_str= f"target_{target_name.lower()}_{h}m"            
+            #list version for pandas slicing and pca dropping
+            target_col_list= [target_col_str]             
+            #check existence using string 
             if target_col_str not in df.columns:
-                print(f"Skipping {target_col_str} (not found)")
+                #skip if target column missing from dataset
+                print(f"skipping {target_col_str} (not found)")
                 continue
-
-            # Identify ALL target columns in the entire dataframe to prevent leakage
-            # (We want to drop "target_headline" even when predicting "target_core")
-            all_target_cols_drop_list = [c for c in df.columns if 'target_' in c]
-
-            # Create system for this horizon
-            # We keep all predictors, plus the specific target we are predicting
-            df_system = df[target_col_list + predictor_cols].copy()
-            
-            total_rows = len(df_system)
-            requested_start_idx = df_system.index.get_loc(eval_start_date)
+            #create system for this horizon including specific target and predictors
+            df_system= df[target_col_list + predictor_cols].copy()            
+            #get total row count for loop control
+            total_rows= len(df_system)
+            #get location of evaluation start date in index
+            requested_start_idx= df_system.index.get_loc(eval_start_date)
+            #handle potential slice return from get_loc
             if isinstance(requested_start_idx, slice):
-                requested_start_idx = requested_start_idx.start
-            start_idx = max(requested_start_idx, training_offset)
-
-            pca_bundle = None
-            pca_cols, keep_cols = None, None
-
+                requested_start_idx= requested_start_idx.start
+            #ensure start index respects training offset
+            start_idx= max(requested_start_idx, training_offset)
+            #initialize pca holders
+            pca_bundle= None
+            pca_cols, keep_cols= None, None
             #initialize for recursive predictions
             current_idx= start_idx
-            #initialize dictionary where keys are target names and values are empty lists
-            results_list = []
-            #initialize var to store tuned params
-            tuned_params=None 
-            #counter when to re-tune (every 3 years)
-            months_since_last_tune=0
-            tune_frequency = 36
-            #recursive forecasting loop (do with direct forecasting)
-            pca_bundle_fixed = None
-
+            #initialize results list for storage
+            results_list= []
+            #initialize var to store tuned hyperparams
+            tuned_params= None 
+            #counter for re-tuning frequency check
+            months_since_last_tune= 0
+            #set tuning frequency to 3 years
+            tune_frequency= 36
+            #initialize fixed pca bundle for stability
+            pca_bundle_fixed= None
+            #pre-fit pca if factors requested
             if use_pca_factors:
-                pub_lag = 2
-                pca_fit_end_date = eval_start_date - pd.DateOffset(months=pub_lag)
+                #respect publication lag for factor fit
+                pub_lag= 2
+                #set end date for pca training sample
+                pca_fit_end_date= eval_start_date - pd.DateOffset(months=pub_lag)
 
-                # build a clean predictor-only matrix up to pca_fit_end_date
-                df_pca_fit = df_system.loc[:pca_fit_end_date].copy()
+                #build clean predictor-only matrix up to fit end date
+                df_pca_fit= df_system.loc[:pca_fit_end_date].copy()
+                #drop all targets to avoid leakage in factors
+                cols_to_drop= [c for c in df_pca_fit.columns if 'target_' in c]
+                #remove nans for valid pca fit
+                X_pca_fit= df_pca_fit.drop(columns=cols_to_drop).dropna()
+                #choose pca vs keep columns once
+                pca_cols, keep_cols= get_pca(df_columns=X_pca_fit.columns, target_cols_to_drop=[], target_name=target_name, config=config)
 
-                cols_to_drop = [c for c in df_pca_fit.columns if 'target_' in c]
-                X_pca_fit = df_pca_fit.drop(columns=cols_to_drop).dropna()
-
-                # choose pca_cols/keep_cols once
-                pca_cols, keep_cols = get_pca(
-                    df_columns=X_pca_fit.columns,
-                    target_cols_to_drop=[],
-                    target_name=target_name,
-                    config=config
-                )
-
-                # fit PCA once by calling your helper with pca_bundle=None
-                # Use a dummy X_test (e.g., last row) just to trigger fitting
-                X_train_factors, X_test_factors, pca_bundle_fixed = make_factor_features_time_safe(
-                    X_train=X_pca_fit,
-                    X_test=X_pca_fit.tail(1),
-                    pca_cols=pca_cols,
-                    keep_cols=keep_cols,
-                    config=config,
-                    forecast_date=pca_fit_end_date,
-                    target_name=target_name,
-                    h=h,
-                    top_k=5,
-                    pca_bundle=None
-                )
-
-            while current_idx< total_rows:
-                #get date
+                #fit pca once using time-safe helper
+                X_train_factors, X_test_factors, pca_bundle_fixed= make_factor_features_time_safe( X_train=X_pca_fit, X_test=X_pca_fit.tail(1), pca_cols=pca_cols,
+                    keep_cols=keep_cols, config=config, forecast_date=pca_fit_end_date,
+                    target_name=target_name, h=h, top_k=5, pca_bundle=None)
+            #main recursive forecasting loop
+            while current_idx <total_rows:
+                #get current forecast origin date
                 forecast_date= df_system.index[current_idx]
-                target_date=forecast_date+pd.DateOffset(months=h)
-                #skip if not a training and forecasting month 
+                #calculate realization target date
+                target_date= forecast_date+pd.DateOffset(months=h)                
+                #skip if not snb policy month
                 if forecast_date.month not in snb_months:
                     current_idx+= 1
-                    months_since_last_tune += 1  #want to check monthly
+                    #increment tuning counter monthly
+                    months_since_last_tune+= 1
                     continue          
 
-                #skip if target for evaluation not available (e.g. if we are at the end of the data and do not have the target realized yet)
+                #skip if target realization not yet available in data
                 if target_date not in df_yoy.index:
                     current_idx+= 1
-                    continue
-                #targets only know if they finished before forecast date
-                pub_lag =2    #respect publication lag of 2 months
-                train_end_idx =current_idx-h-pub_lag
-                if train_end_idx <training_offset+lags:
+                    continue                
+                #respect 2 month publication lag
+                pub_lag= 2    
+                #calculate end of available training data
+                train_end_idx= current_idx - h - pub_lag
+                #ensure sufficient data for lags
+                if train_end_idx < training_offset + lags:
                     current_idx+= 1
                     continue
-                # Define indices for slicing
-                idx_train_end = train_end_idx
-                # Ensure we don't go negative on start
-                pub_lag = 2
-                t_obs = current_idx - pub_lag
-
-                # ensure we have enough rows for lags
-                test_start = max(training_offset, t_obs - lags)
-                
-
-                # 1. Create Initial Slices
-                df_train = df_system.iloc[training_offset : idx_train_end + 1].dropna(subset=target_col_list)
-                X_test_raw = df_system.iloc[test_start : t_obs + 1].copy()
-                
-                # 2. IDENTIFY AND SEPARATE TARGETS FROM PREDICTORS
-                # We must drop ALL target columns from the data used for PCA/Factors
-                # otherwise the PCA weights will learn to recognize the target variable.
-                cols_to_drop = [c for c in df_train.columns if 'target_' in c]
-                
-                # Create pure predictor dataframes (No Targets!)
-                X_train_predictors = df_train.drop(columns=cols_to_drop)
-                X_test_predictors = X_test_raw.drop(columns=cols_to_drop)
-                
-                # Save targets aside to re-attach later
-                # Note: We only need the specific target we are forecasting for the model fitting
-                y_train = df_train[target_col_list]
-                y_test = X_test_raw[target_col_list]
-
-                if use_pca_factors:
-                    cols_to_drop = [c for c in df_train.columns if 'target_' in c]
-                    X_train_safe = df_train.drop(columns=cols_to_drop)
-                    X_test_safe  = X_test_raw.drop(columns=cols_to_drop)
-
-                    X_train_factors, X_test_factors, _ = make_factor_features_time_safe(
-                        X_train=X_train_safe,
-                        X_test=X_test_safe,
-                        pca_cols=pca_bundle_fixed["pca_cols"],
-                        keep_cols=pca_bundle_fixed["keep_cols"],
-                        config=config,
-                        forecast_date=forecast_date,
-                        target_name=target_name,
-                        h=h,
-                        top_k=5,
-                        pca_bundle=pca_bundle_fixed   # <-- freeze
-                    )
-
-                    df_train = pd.concat([y_train, X_train_factors], axis=1)
-                    X_test   = pd.concat([y_test,  X_test_factors], axis=1)
-                    X_test = X_test.reindex(columns=df_train.columns)
-                else:
-                    # If not using PCA, X_test is just the raw slice
-                    X_test = X_test_raw
-                # --- FIX leakage: overwrite pre-shifted target at origin row (works for PCA and non-PCA) ---
-                # after X_test is FINAL (after the non-PCA slice too)
-
-
                     
-                #determine if need to retune
-                should_tune=False
-                #if first run-> tune:
+                #define indices for slicing training set
+                idx_train_end= train_end_idx
+                #set observation point for test features
+                pub_lag= 2
+                t_obs= current_idx -pub_lag
+                #ensure test window includes enough history for lags
+                test_start= max(training_offset, t_obs -lags)                
+                #create initial slices for train and test
+                df_train= df_system.iloc[training_offset : idx_train_end + 1].dropna(subset=target_col_list)
+                X_test_raw= df_system.iloc[test_start : t_obs + 1].copy()
+                
+                #identify and separate targets from predictors
+                #drop all targets to prevent weights learning target patterns
+                cols_to_drop= [c for c in df_train.columns if 'target_' in c]                
+                #create pure predictor dataframes
+                X_train_predictors= df_train.drop(columns=cols_to_drop)
+                X_test_predictors= X_test_raw.drop(columns=cols_to_drop)                
+                #save target values for fitting
+                y_train= df_train[target_col_list]
+                y_test= X_test_raw[target_col_list]
+                #transform features into factors if requested
+                if use_pca_factors:
+                    #identify targets to drop
+                    cols_to_drop= [c for c in df_train.columns if 'target_' in c]
+                    #isolate predictors
+                    X_train_safe= df_train.drop(columns=cols_to_drop)
+                    X_test_safe= X_test_raw.drop(columns=cols_to_drop)
+                    #apply frozen pca weights to current window
+                    X_train_factors, X_test_factors, _= make_factor_features_time_safe(X_train=X_train_safe, X_test=X_test_safe,
+                        pca_cols=pca_bundle_fixed["pca_cols"], keep_cols=pca_bundle_fixed["keep_cols"], config=config, forecast_date=forecast_date,
+                        target_name=target_name, h=h, top_k=5, pca_bundle=pca_bundle_fixed)
+                    #reconstruct training and test matrices with factors
+                    df_train= pd.concat([y_train, X_train_factors], axis=1)
+                    X_test= pd.concat([y_test, X_test_factors], axis=1)
+                    #ensure test columns match train order
+                    X_test=X_test.reindex(columns=df_train.columns)
+                else:
+                    #use raw slices if pca disabled
+                    X_test= X_test_raw
+                #determine if retuning is required
+                should_tune= False
+                #tune on first run
                 if tuned_params is None:
-                    should_tune =True
-                #else every 3 years
-                elif months_since_last_tune>= tune_frequency:
-                    should_tune=True 
-                    months_since_last_tune = 0 #reset counter
-                #initialize params to tune -> not tune yet can use default
+                    should_tune= True
+                #tune every 36 months thereafter
+                elif months_since_last_tune >= tune_frequency:
+                    should_tune= True 
+                    #reset counter after tuning
+                    months_since_last_tune= 0                 
+                #use previous tuned params or initial defaults
                 init_params= tuned_params if tuned_params else initial_prior_params
 
-                #initialize and fit BVAR model
+                #initialize bvar model with specific implementation
                 model= BVAR(lags=lags, prior_type=prior_type, prior_params=init_params, implementation_type=implementation_type)
-                #retune every 3 years
+                
+                #perform fit with or without hyperparam optimization
                 if should_tune:
-                    model.fit(df_train, horizon=h) #without fixed lambda
-                    #save best params
-                    tuned_params = model.params.copy()
-                    months_since_last_tune =0   #reset counter
-                #else use lambda from last tuning
+                    #full fit for hyperparam tuning
+                    model.fit(df_train, horizon=h) 
+                    #save new tuned params
+                    tuned_params= model.params.copy()
+                    #reset counter
+                    months_since_last_tune= 0   
                 else:
+                    #fit using fixed lambda from previous tuning
                     if 'independent_niw' in prior_type:
+                        #use independent prior fixed lambda
                         model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', initial_prior_params.get('lambda', 0.2)))
                     else:
+                        #use standard fixed lambda fit
                         model.fit(df_train, horizon=h, fixed_lambda=tuned_params.get('lambda', 0.2))
-                    months_since_last_tune += 1
+                    #increment months since tuning
+                    months_since_last_tune+= 1
                 
-                #def test set and include enough previous obs for lags
+                #fix leakage in test set for non-pca path
                 if not use_pca_factors:
-                # how many rows do we need so forecast() never uses negative idx_y?
-                    required_rows = h + max([0, 1]) + 1   # = h + 2 because max lag index = 1
+                    #calculate required rows for lag construction
+                    required_rows= h +max([0, 1])+1 
+                    #calculate start index for test history
+                    start= current_idx-(required_rows- 1)
+                    #isolate test window
+                    X_test= df_system.iloc[start: current_idx+1]
+                    #identify max lag used by model
+                    max_lag= max(model.lag_indices) 
 
-                    start = current_idx - (required_rows - 1)
-                    X_test = df_system.iloc[start : current_idx + 1]
-                    max_lag = max(model.lag_indices)  # = 1
-
+                    #overwrite pre-shifted targets with actual known values at origin
                     for tc in target_col_list:
-                        col = X_test.columns.get_loc(tc)
-                        for L in range(max_lag + 1):  # L=0,1
-                            # row for (t-L) currently holds y_{t-L+h}; replace with y_{t-L}
-                            X_test = df_system.iloc[start : current_idx + 1].copy()
-
-
-
-
-                
-                #forecast
-                preds_draws_all=model.forecast(X_test)
-                
-                
-                #preds draws made corresnponding to current target col
-                preds_draws=preds_draws_all[:, 0]
-                #get params for shaply
+                        col= X_test.columns.get_loc(tc)
+                        for L in range(max_lag + 1):
+                            #replace future shift with true historical y_t-L
+                            X_test= df_system.iloc[start : current_idx+1].copy()
+                #generate posterior predictive draws
+                preds_draws_all= model.forecast(X_test)                
+                #isolate draws for specific target variable
+                preds_draws= preds_draws_all[:, 0]
+                #extract coefficients for shapley calculation
                 x_input_series, coeffs_dict, intercept= model.shapley_params(X_test, 0)
 
-                #calc shapley values
-                shap_dict=shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
+                #calculate shapley values for feature contribution
+                shap_dict= shap_values(model_obj=None, X_input=x_input_series, X_train=None, model_type='linear', linear_coeffs=coeffs_dict, linear_const=intercept)
 
-                # =========================================================
-                # (A) DIRECT TARGET EVALUATION (MAIN MODEL COMPARISON)
-                # =========================================================
-                eval_quantiles = np.linspace(0.01, 0.99, 99)
-
-                # actual direct target (pre-shifted target series at forecast origin)
-                actual_direct = df.loc[forecast_date, target_col_str]
+                #direct target evaluation
+                #----------------------------
+                #setup grid for predictive density evaluation
+                eval_quantiles= np.linspace(0.01, 0.99, 99)
+                #get actual realized target at forecast origin
+                actual_direct= df.loc[forecast_date, target_col_str]
+                #skip if target realized value missing
                 if pd.isna(actual_direct):
-                    current_idx += 1
+                    current_idx+= 1
                     continue
+                #fit skew-t distribution to direct predictive draws
+                direct_fit_quantiles= np.percentile(preds_draws, eval_quantiles * 100.0)
+                #estimate parametric distribution params
+                skew_params_direct= fit_skew_t(direct_fit_quantiles, eval_quantiles)
 
-                # Fit skew-t to DIRECT predictive distribution (draws -> quantiles -> fit)
-                direct_fit_quantiles = np.percentile(preds_draws, eval_quantiles * 100.0)
-                skew_params_direct = fit_skew_t(direct_fit_quantiles, eval_quantiles)
-
-                crps_direct_parametric = calculate_crps(actual_direct, skew_params_direct)
-                crps_direct_empirical  = calculate_crps_quantile(
-                    actual_direct,
-                    direct_fit_quantiles[None, :],
-                    eval_quantiles
-                )
+                #calculate crps scores for performance comparison
+                crps_direct_parametric= calculate_crps(actual_direct, skew_params_direct)
+                crps_direct_empirical= calculate_crps_quantile(actual_direct, direct_fit_quantiles[None, :], eval_quantiles)
+                #handle iterable returns for mean score
                 if hasattr(crps_direct_empirical, "__iter__"):
-                    crps_direct_empirical = float(np.mean(crps_direct_empirical))
+                    crps_direct_empirical= float(np.mean(crps_direct_empirical))
 
-                pit_direct = stats.nct.cdf(
-                    actual_direct,
-                    skew_params_direct[0],
-                    skew_params_direct[1],
-                    loc=skew_params_direct[2],
-                    scale=skew_params_direct[3],
-                )
+                #calculate pit for calibration check
+                pit_direct= stats.nct.cdf(actual_direct, skew_params_direct[0], skew_params_direct[1], loc=skew_params_direct[2], scale=skew_params_direct[3])
+                #calculate median and point forecast errors
+                median_direct= float(np.median(preds_draws))
+                rmse_direct= calculate_rmse(actual_direct, median_direct)
+                #store direct space shapley values
+                final_shap_direct= {f"SHAP_{k}": float(np.asarray(v).squeeze()) for k, v in shap_dict.items()}
 
-                median_direct = float(np.median(preds_draws))
-                rmse_direct   = calculate_rmse(actual_direct, median_direct)
-
-                # SHAP stays in DIRECT space (do NOT transform to YoY)
-                final_shap_direct = {f"SHAP_{k}": float(np.asarray(v).squeeze()) for k, v in shap_dict.items()}
-
-                # =========================================================
-                # (B) EX-POST YOY RECONSTRUCTION (PLOTS ONLY)
-                # =========================================================
-                T = target_date
+                #ex-post yoy evaluation
+                #--------------------------------------
+                #set target verification date
+                T= target_date
                 if T not in df_yoy.index:
-                    current_idx += 1
+                    current_idx+= 1
                     continue
-
-                actual_yoy = df_yoy.loc[T, target_name]
+                #get realized yoy inflation at target date
+                actual_yoy= df_yoy.loc[T, target_name]
                 if pd.isna(actual_yoy):
-                    current_idx += 1
+                    current_idx+= 1
                     continue
-
-                raw_col = f"{target_name}_level"   # e.g. "Core_level" / "Headline_level"
-                scaling = h / 12.0
-
+                #define raw level column and time scaling
+                raw_col= f"{target_name}_level"   
+                scaling= h /12.0
+                #handle 12m horizon specific reconstruction
                 if h == 12:
-                    # If your 12m target is already YoY-like in your construction, no anchor needed
-                    preds_draws_yoy_expost = preds_draws.copy()
-                    base_effect_expost = 0.0
+                    #use direct draws for 12m yoy
+                    preds_draws_yoy_expost= preds_draws.copy()
+                    base_effect_expost= 0.0
                 else:
-                    # ex-post uses realized level at forecast_date (P_t)
-                    lower = T - pd.DateOffset(months=12)
+                    #calculate anchor date for 12m yoy
+                    lower= T - pd.DateOffset(months=12)
                     if (forecast_date not in df_yoy.index) or (lower not in df_yoy.index):
-                        current_idx += 1
+                        current_idx+= 1
                         continue
+                    #calculate log changes for base effect
+                    p_t= np.log(df_yoy.loc[forecast_date, raw_col])   
+                    p_low= np.log(df_yoy.loc[lower, raw_col])           
+                    base_effect_expost= 100.0 *(p_t-p_low)
+                    #reconstruct yoy draws from forecast origin
+                    preds_draws_yoy_expost= base_effect_expost+ preds_draws*scaling
 
-                    p_t   = np.log(df_yoy.loc[forecast_date, raw_col])   # realized P_t (ex-post)
-                    p_low = np.log(df_yoy.loc[lower, raw_col])           # P_{T-12}
-                    base_effect_expost = 100.0 * (p_t - p_low)
+                #calculate yoy quantiles for plotting
+                q05_yoy= float(np.percentile(preds_draws_yoy_expost, 5))
+                q16_yoy= float(np.percentile(preds_draws_yoy_expost, 16))
+                q84_yoy= float(np.percentile(preds_draws_yoy_expost, 84))
+                q95_yoy= float(np.percentile(preds_draws_yoy_expost, 95))
+                median_yoy= float(np.median(preds_draws_yoy_expost))
 
-                    preds_draws_yoy_expost = base_effect_expost + preds_draws * scaling
-
-                # Plot quantiles (YoY, ex-post)
-                q05_yoy = float(np.percentile(preds_draws_yoy_expost, 5))
-                q16_yoy = float(np.percentile(preds_draws_yoy_expost, 16))
-                q84_yoy = float(np.percentile(preds_draws_yoy_expost, 84))
-                q95_yoy = float(np.percentile(preds_draws_yoy_expost, 95))
-                median_yoy = float(np.median(preds_draws_yoy_expost))
-
-                # =========================================================
-                # (C) TIME-SAFE YOY CRPS (SNB-ish METRIC, NO BRIDGE)
-                # =========================================================
-                pub_lag = 2
-                t_known = forecast_date - pd.DateOffset(months=pub_lag)
-
-                crps_yoy_timesafe_parametric = np.nan
-                crps_yoy_timesafe_empirical  = np.nan
-
+                #time-safe yoy evaluation
+                #-----------------------------
+                #set publication lag for snb comparison
+                pub_lag= 2
+                #define date of latest available data at origin
+                t_known= forecast_date -pd.DateOffset(months=pub_lag)
+                #initialize time-safe scores
+                crps_yoy_timesafe_parametric= np.nan
+                crps_yoy_timesafe_empirical= np.nan
                 if h == 12:
-                    # again: if 12m target is already YoY-like, time-safe == direct
-                    preds_draws_yoy_timesafe = preds_draws.copy()
+                    #direct draws are time-safe for 12m horizon
+                    preds_draws_yoy_timesafe= preds_draws.copy()
                 else:
-                    lower = T - pd.DateOffset(months=12)
+                    #reconstruct using only data available at publication lag
+                    lower= T - pd.DateOffset(months=12)
                     if (t_known in df_yoy.index) and (lower in df_yoy.index):
-                        p_known = np.log(df_yoy.loc[t_known, raw_col])   # P_{t-2}
-                        p_low   = np.log(df_yoy.loc[lower,   raw_col])   # P_{T-12}
-
-                        base_effect_timesafe = 100.0 * (p_known - p_low)
-                        preds_draws_yoy_timesafe = base_effect_timesafe + preds_draws * scaling
+                        #get known log levels
+                        p_known= np.log(df_yoy.loc[t_known, raw_col])   
+                        p_low= np.log(df_yoy.loc[lower,   raw_col])   
+                        #calc base effect from known historical levels
+                        base_effect_timesafe= 100.0 * (p_known - p_low)
+                        #generate time-safe predictive distribution
+                        preds_draws_yoy_timesafe= base_effect_timesafe +preds_draws*scaling
                     else:
-                        preds_draws_yoy_timesafe = None
+                        preds_draws_yoy_timesafe= None
 
+                #calculate scores if time-safe distribution reconstructed successfully
                 if preds_draws_yoy_timesafe is not None:
-                    yoy_fit_quantiles = np.percentile(preds_draws_yoy_timesafe, eval_quantiles * 100.0)
-                    skew_params_yoy = fit_skew_t(yoy_fit_quantiles, eval_quantiles)
-
-                    crps_yoy_timesafe_parametric = calculate_crps(actual_yoy, skew_params_yoy)
-                    crps_yoy_timesafe_empirical  = calculate_crps_quantile(
-                        actual_yoy,
-                        yoy_fit_quantiles[None, :],
-                        eval_quantiles
-                    )
+                    #get quantiles for fit
+                    yoy_fit_quantiles= np.percentile(preds_draws_yoy_timesafe, eval_quantiles*100.0)
+                    #estimate yoy distribution params
+                    skew_params_yoy= fit_skew_t(yoy_fit_quantiles, eval_quantiles)
+                    #calc parametric and empirical yoy crps
+                    crps_yoy_timesafe_parametric= calculate_crps(actual_yoy, skew_params_yoy)
+                    crps_yoy_timesafe_empirical= calculate_crps_quantile(actual_yoy, yoy_fit_quantiles[None, :], eval_quantiles)
+                    #format empirical score
                     if hasattr(crps_yoy_timesafe_empirical, "__iter__"):
-                        crps_yoy_timesafe_empirical = float(np.mean(crps_yoy_timesafe_empirical))
+                        crps_yoy_timesafe_empirical= float(np.mean(crps_yoy_timesafe_empirical))
 
-                # =========================================================
-                # STORE RESULTS (DIRECT + YOY PLOTS + YOY TIME-SAFE CRPS)
-                # =========================================================
-                results_entry = {
-                    'Date': forecast_date,
-                    'Target_date': target_date,
+                #bundle all metrics into results entry
+                results_entry= {'Date': forecast_date, 'Target_date': target_date, 'Actual_direct': float(actual_direct),
+                    'Forecast_median_direct': median_direct, 'CRPS_direct_parametric': float(crps_direct_parametric), 'CRPS_direct_empirical': float(crps_direct_empirical),
+                    'RMSE_direct': float(rmse_direct), 'PIT_direct': float(pit_direct), 'df_skewt_direct': float(skew_params_direct[0]),
+                    'nc_skewt_direct': float(skew_params_direct[1]), 'loc_skewt_direct': float(skew_params_direct[2]), 'scale_skewt_direct': float(skew_params_direct[3]),
+                    'Actual_YoY': float(actual_yoy), 'Forecast_median_YoY': median_yoy, 'q05_YoY': q05_yoy, 'q16_YoY': q16_yoy, 'q84_YoY': q84_yoy,
+                    'q95_YoY': q95_yoy, 'BaseEffect_YoY_expost': float(base_effect_expost), 'CRPS_YoY_timesafe_parametric': float(crps_yoy_timesafe_parametric) if np.isfinite(crps_yoy_timesafe_parametric) else np.nan,
+                    'CRPS_YoY_timesafe_empirical': float(crps_yoy_timesafe_empirical) if np.isfinite(crps_yoy_timesafe_empirical) else np.nan}
 
-                    # (A) Direct target metrics (main comparison)
-                    'Actual_direct': float(actual_direct),
-                    'Forecast_median_direct': median_direct,
-                    'CRPS_direct_parametric': float(crps_direct_parametric),
-                    'CRPS_direct_empirical': float(crps_direct_empirical),
-                    'RMSE_direct': float(rmse_direct),
-                    'PIT_direct': float(pit_direct),
-                    'df_skewt_direct': float(skew_params_direct[0]),
-                    'nc_skewt_direct': float(skew_params_direct[1]),
-                    'loc_skewt_direct': float(skew_params_direct[2]),
-                    'scale_skewt_direct': float(skew_params_direct[3]),
-
-                    # (B) YoY ex-post outputs (plots)
-                    'Actual_YoY': float(actual_yoy),
-                    'Forecast_median_YoY': median_yoy,
-                    'q05_YoY': q05_yoy,
-                    'q16_YoY': q16_yoy,
-                    'q84_YoY': q84_yoy,
-                    'q95_YoY': q95_yoy,
-                    'BaseEffect_YoY_expost': float(base_effect_expost),
-
-                    # (C) YoY time-safe CRPS (SNB-ish metric, no bridge)
-                    'CRPS_YoY_timesafe_parametric': float(crps_yoy_timesafe_parametric) if np.isfinite(crps_yoy_timesafe_parametric) else np.nan,
-                    'CRPS_YoY_timesafe_empirical': float(crps_yoy_timesafe_empirical) if np.isfinite(crps_yoy_timesafe_empirical) else np.nan,
-                }
-
-                # add SHAP (direct space)
+                #append direct space shap values
                 results_entry.update(final_shap_direct)
-
+                #store in results list
                 results_list.append(results_entry)
-                current_idx += 1
+                #move to next window index
+                current_idx+= 1
 
-                        
-            #save and evaluate final recursive results
-            results_df =pd.DataFrame(results_list)
+            #save final results to csv for experiment
+            results_df= pd.DataFrame(results_list)
             if not results_df.empty:
+                #set forecast origin as index
                 results_df.set_index('Date', inplace=True)
-                save_name = f"Results/Data_experiments_bvar2/{config['experiment_name']}_{target_name}_{h}m.csv"
+                #construct unique filename for target and horizon
+                save_name= f"Results/Data_experiments_bvar2/{config['experiment_name']}_{target_name}_{h}m.csv"
+                #export result table
                 results_df.to_csv(save_name)
 
 if __name__ =="__main__":

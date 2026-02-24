@@ -27,5 +27,5 @@ summary_df=pd.DataFrame(all_results)
 #print the full table to console for immediate check of Headline vs Core results
 print(summary_df.to_string(index=False))
 #define output path for the summary table (to be used for paper tables)
-save_name=f"Scripts/Plots_and_Tables/06a_mean_metrics_table.csv"
-#summary_df.to_csv(save_name) 
+save_name=f"Scripts/Plots_and_Tables/06a_calculate_mean_metrics/06a_mean_metrics_table.csv"
+summary_df.to_csv(save_name) 

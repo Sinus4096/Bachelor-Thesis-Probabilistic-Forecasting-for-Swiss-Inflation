@@ -13,7 +13,7 @@ from scipy.stats import nct
 #config
 #-----------------------------
 #select inflation measure for analysis
-data_type= "Headline"
+data_type= "Core"
 #define horizons 
 horizons= [3, 6, 9, 12]
 #set window size for moving average metrics
@@ -21,7 +21,7 @@ rolling_window= 36
 #column name for continuous ranked probability score
 crps_col= "Parametric_CRPS"
 #list of models to include in comparative summary
-models_compare= ["Benchmark_ARGARCH", "bvar_natural_niw_hierarchical", "QRF_Default"]
+models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical", "QRF_Default"]
 #initialize empty list for subfolder paths
 results_subfolder: List[str]= []
 #max number of features to show in shapley plots
@@ -33,32 +33,29 @@ shap_heatmap_value= "abs"
 #rolling window for downside risk metrics
 tailrisk_rolling= 12
 #dictionary to link model keys with specific factor loading files
-PCA_FACTOR_FILES= {
-    "QRF_Default_Lin_Feat_PCA": "Factor_Summary_QRF_Default_LFeat_PCA.csv",
-}
+PCA_FACTOR_FILES= {"QRF_Default_Lin_Feat_PCA": "Factor_Summary_QRF_Default_LFeat_PCA.csv"}
 
 
-# -----------------------------
-# Column aliases (NEW SCHEMA)
-# -----------------------------
-# Use YoY columns for evaluation/plots (matches data_yoy.csv)
-ACTUAL_COL = "Actual_YoY"
-MEDIAN_COL = "Forecast_median_YoY"
-
-# Quantiles (YoY)
-Q05_COL = "q05_YoY"
-Q16_COL = "q16_YoY"
-Q84_COL = "q84_YoY"
-Q95_COL = "q95_YoY"
-
-# PIT + CRPS (new names)
-PIT_COL = "PIT_direct"
-crps_col = "CRPS_YoY_timesafe_parametric"   # overrides your previous "Parametric_CRPS"
-
-# SHAP (new prefix + base/constant columns)
-SHAP_PREFIX = "SHAP_"
-SHAP_BASE_COL = "BaseEffect_YoY_expost"     # base effect in your new files
-SHAP_EXCLUDE = {SHAP_BASE_COL, "SHAP_Shap_Constant"}  # exclude constant from feature ranking/heatmaps
+#column aliases (new schema)
+#-----------------------------
+#use yoy columns for evaluation/plots 
+ACTUAL_COL= "Actual_YoY"
+MEDIAN_COL= "Forecast_median_YoY"
+#quantiles (yoy) for fan charts
+Q05_COL= "q05_YoY"
+Q16_COL= "q16_YoY"
+Q84_COL= "q84_YoY"
+Q95_COL= "q95_YoY"
+#pit + crps (new names)
+PIT_COL= "PIT_direct"
+#overrides previous "parametric_crps" for better alignment
+crps_col= "CRPS_YoY_timesafe_parametric"   
+#shap (new prefix + base/constant columns)
+SHAP_PREFIX= "SHAP_"
+#base effect in new files
+SHAP_BASE_COL= "BaseEffect_YoY_expost"     
+#exclude constant from feature ranking/heatmaps
+SHAP_EXCLUDE= {SHAP_BASE_COL, "SHAP_Shap_Constant"}
 
 #helpers
 #-----------
@@ -166,14 +163,12 @@ def parse_filename(path: Path, model_keys: List[str]) -> Optional[FileMeta]:
     else:
         #skip files that don't match target types
         return None
-
     #apply regex to find forecast horizon (m suffix)
     mh= HORIZON_RE.search(name)
     if not mh:
         return None
     #convert regex match to integer
     horizon= int(mh.group(1))
-
     #normalize filename for string matching with model keys
     n_name= normalize(name)
     matched= None
@@ -213,26 +208,30 @@ def load_actuals(actuals_path: Path, data_type: str) ->pd.Series:
     return pd.to_numeric(df[data_type], errors="coerce")
 
 def load_forecast(path: Path, actuals: pd.Series) -> pd.DataFrame:
-    df = pd.read_csv(path)
-
+    #read model output csv
+    df= pd.read_csv(path)
+    #verify expected time columns exist
     for c in ["Date", "Target_date"]:
         if c not in df.columns:
+            #abort if file structure is wrong
             raise ValueError(f"{path.name}: missing required column '{c}'")
+    #convert string dates to objects for merging
+    df["Date"]= pd.to_datetime(df["Date"])
+    df["Target_date"]= pd.to_datetime(df["Target_date"])
 
-    df["Date"] = pd.to_datetime(df["Date"])
-    df["Target_date"] = pd.to_datetime(df["Target_date"])
-
-    # Map ground truth YoY actuals onto target_date
-    gt = df["Target_date"].map(actuals)
-
-    # Write into the NEW actual column (YoY)
+    #map ground truth yoy actuals onto target_date
+    gt= df["Target_date"].map(actuals)
+    #write into new actual column using schema alias
     if ACTUAL_COL in df.columns:
-        df[ACTUAL_COL] = np.where(gt.notna(), gt, pd.to_numeric(df[ACTUAL_COL], errors="coerce"))
+        #fill missing values from ground truth series
+        df[ACTUAL_COL]= np.where(gt.notna(), gt, pd.to_numeric(df[ACTUAL_COL], errors="coerce"))
     else:
-        df[ACTUAL_COL] = gt
-
-    df = df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
-    df = df.set_index("Target_date").sort_index()
+        #create column from mapped actuals
+        df[ACTUAL_COL]= gt
+    #sort by target date to ensure chronological results
+    df= df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
+    #set target date as index for evaluation scripts
+    df= df.set_index("Target_date").sort_index()
     return df
 
 
@@ -364,7 +363,7 @@ def project_factor_shap_to_variables(df: pd.DataFrame, pca_w: pd.DataFrame, targ
         #get loading matrix as numpy array
         W= np.nan_to_num(w_d.values, nan=0.0)
         #project factors back to variables: Shap_V = Shap_F @ Loadings
-        proj= sf @ W
+        proj= sf @W
 
         #update output dataframe with projected values
         for j, var in enumerate(variables):
@@ -388,16 +387,11 @@ def shap_feature_importance(df: pd.DataFrame) -> pd.DataFrame:
     #convert string columns to numeric for calculation
     S= df[cols].apply(pd.to_numeric, errors="coerce")
     #calculate importance metrics for ranking
-    out= pd.DataFrame({
-        "Feature": [shap_suffix(c) for c in cols],
-        "MeanAbsSHAP": S.abs().mean().values, #magnitude of impact
-        "MeanSHAP": S.mean().values,           #direction of impact
-    }).sort_values("MeanAbsSHAP", ascending=False)
+    out= pd.DataFrame({"Feature": [shap_suffix(c) for c in cols], "MeanAbsSHAP": S.abs().mean().values, "MeanSHAP": S.mean().values}).sort_values("MeanAbsSHAP", ascending=False)
     #return sorted importance table
     return out
 
-def plot_avg_crps_bar(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str],
-                      horizons: List[int], crps_col: str, data_type: str) -> None:
+def plot_avg_crps_bar(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str], horizons: List[int], crps_col: str, data_type: str) -> None:
     #initialize list for summary rows
     rows= []
     #loop through models for comparison
@@ -435,110 +429,98 @@ def plot_avg_crps_bar(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: 
     plt.show()
 
 
-# -----------------------------
+
 # Helper: fan chart grid
 # -----------------------------
-def plot_fan_chart_grid(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str],
-                        horizons: List[int], data_type: str) -> None:
+def plot_fan_chart_grid(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str], horizons: List[int], data_type: str) -> None:
     #define median column name used in results
     MED_COL= "Forecast_median"
 
     #initialize grid of subplots for horizons vs models
-    fig, axes= plt.subplots(
-        nrows=len(horizons),
-        ncols=len(models_compare),
-        figsize=(18, 14),
-        sharex=False, sharey=False
-    )
-
+    fig, axes= plt.subplots(nrows=len(horizons), ncols=len(models_compare), figsize=(18, 14), sharex=False, sharey=False)
     #loop through rows (horizons)
     for i, h in enumerate(horizons):
         #loop through columns (models)
         for j, model in enumerate(models_compare):
             #select current axis
             ax= axes[i, j]
-            #get data for current cell
+            #get data for current cell from nested results dict
             df= data.get(model, {}).get(h)
-
-            #label top columns with model names
+            #label top columns with model names for first row
             if i== 0:
                 ax.set_title(model, fontweight="bold")
-            #label left rows with horizon lengths
+            #label left rows with horizon lengths for first column
             if j== 0:
                 ax.set_ylabel(f"h={h}m", fontweight="bold")
-
-            #add light grid for readability
+            #add light grid for readability in plot grid
             ax.grid(True, alpha=0.2)
-
-            #handle missing data scenarios in grid
+            #handle missing data scenarios in grid where column is missing
             if df is None or MEDIAN_COL not in df.columns:
+                #place text centered if no data available
                 ax.text(0.5, 0.5, "No median", ha="center", va="center")
                 continue
+            #convert median and actual series to numeric for plotting
+            med= pd.to_numeric(df[MEDIAN_COL], errors="coerce")
+            act= pd.to_numeric(df[ACTUAL_COL], errors="coerce") if ACTUAL_COL in df.columns else None
 
-            med = pd.to_numeric(df[MEDIAN_COL], errors="coerce")
-            act = pd.to_numeric(df[ACTUAL_COL], errors="coerce") if ACTUAL_COL in df.columns else None
-
+            #plot realization line if actuals are available
             if act is not None:
                 ax.plot(act.index, act.values, linewidth=2.0, label="Actual")
-
+            #plot median forecast line across time
             ax.plot(med.index, med.values, linewidth=2.0, label="Median")
-
+            #plot inner uncertainty band (1 standard deviation proxy)
             if all(c in df.columns for c in [Q16_COL, Q84_COL]):
-                q16 = pd.to_numeric(df[Q16_COL], errors="coerce")
-                q84 = pd.to_numeric(df[Q84_COL], errors="coerce")
+                q16= pd.to_numeric(df[Q16_COL], errors="coerce")
+                q84= pd.to_numeric(df[Q84_COL], errors="coerce")
                 ax.fill_between(q16.index, q16.values, q84.values, alpha=0.20, label="16–84")
-
+            #plot outer uncertainty band for tail coverage
             if all(c in df.columns for c in [Q05_COL, Q95_COL]):
-                q05 = pd.to_numeric(df[Q05_COL], errors="coerce")
-                q95 = pd.to_numeric(df[Q95_COL], errors="coerce")
+                q05= pd.to_numeric(df[Q05_COL], errors="coerce")
+                q95= pd.to_numeric(df[Q95_COL], errors="coerce")
                 ax.fill_between(q05.index, q05.values, q95.values, alpha=0.12, label="05–95")
             #place legend only in first subplot to reduce clutter
             if i== 0 and j== 0:
                 ax.legend(loc="upper left")
             else:
+                #remove legend from secondary plots
                 if ax.get_legend() is not None:
                     ax.get_legend().remove()
 
-    #set overall figure title
+    #set overall figure title for fan chart grid
     plt.suptitle(f"Predictive Quantiles (Fan Charts) – {data_type}", fontsize=16, fontweight="bold", y=1.01)
     #adjust layout and show
     plt.tight_layout()
     plt.show()
 
 
-
-# -----------------------------
-# Helper: density comparison for a chosen origin date
-# -----------------------------
-def plot_density_for_origin(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str],
-                            origin_date: pd.Timestamp, horizon: int, data_type: str) -> None:
-    #setup figure for density curves
+#Helper: density comparison for a chosen origin date
+#-----------------------------
+def plot_density_for_origin(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str], origin_date: pd.Timestamp, horizon: int, data_type: str) -> None:
+    #setup figure for density curves comparison
     plt.figure(figsize=(12, 6))
     #flag to check if any model had valid density parameters
     any_plotted= False
-    #initialize actual value tracker
+    #initialize actual value tracker for realization line
     actual_val= None
 
-    #iterate models to overlay densities
+    #iterate models to overlay densities for same date/horizon
     for model in models_compare:
         #extract results for specific model and horizon
         df= data.get(model, {}).get(horizon)
         if df is None or "Date" not in df.columns:
             continue
-
         #filter for specific origin date requested
-        rows= df[df["Date"] == origin_date]
+        rows= df[df["Date"]== origin_date]
         if rows.empty:
             continue
 
-        #extract first matching row
+        #extract first matching row for distribution params
         row= rows.iloc[0]
-        #list of parameters required for skew-t density
+        #list of parameters required for skew-t density fit
         needed= ["df_skewt", "nc_skewt", "loc_skewt", "scale_skewt"]
         #skip if skew-t parameters missing from results
         if any(col not in rows.columns for col in needed):
             continue
-
         #convert parameters to float for distribution fitting
         try:
             df_sk= float(row["df_skewt"])
@@ -547,34 +529,29 @@ def plot_density_for_origin(data: Dict[str, Dict[int, pd.DataFrame]], models_com
             scale= float(row["scale_skewt"])
         except Exception:
             continue
-
-        #check for actual realization value
-        if "Actual" in rows.columns and pd.notna(row["Actual"]):
-            actual_val= float(row["Actual"])
-
+        #check for actual realization value at target date
+        if ACTUAL_COL in rows.columns and pd.notna(row[ACTUAL_COL]):
+            actual_val= float(row[ACTUAL_COL])
         #create x-axis range covering 4 standard deviations
-        x= np.linspace(loc - 4.0 * scale, loc + 4.0 * scale, 600)
+        x= np.linspace(loc -4.0*scale, loc+4.0*scale, 600)
         #calculate probability density function using non-central t-distribution
         pdf= nct.pdf(x, df_sk, nc_sk, loc=loc, scale=scale)
-
-        #plot density curve for model
+        #plot density curve for specific model
         plt.plot(x, pdf, linewidth=2.2, label=model)
-        #fill area under curve for visual weight
+        #fill area under curve for visual weight in plot
         plt.fill_between(x, pdf, alpha=0.12)
         any_plotted= True
-
-    #add vertical line for true outcome
+    #add vertical line for true outcome realization
     if actual_val is not None:
         plt.axvline(actual_val, linestyle="--", linewidth=2.0, label=f"Actual={actual_val:.2f}")
-
-    #handle empty plot case
+    #handle empty plot case if no models matched
     if not any_plotted:
         plt.title(f"No densities available for origin={origin_date.date()} at h={horizon}m")
         plt.legend()
         plt.show()
         return
 
-    #finalize plot aesthetics
+    #finalize plot aesthetics and labels
     plt.title(f"Predictive Density – {data_type} – origin={origin_date.date()}, h={horizon}m", fontweight="bold")
     plt.xlabel(f"{data_type} YoY")
     plt.ylabel("Density")
@@ -583,410 +560,418 @@ def plot_density_for_origin(data: Dict[str, Dict[int, pd.DataFrame]], models_com
     plt.tight_layout()
     plt.show()
 
-# -----------------------------
-# Helper: skewness + tail thickness grids
-# -----------------------------
-def plot_skew_and_tailrisk(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str],
-                           horizons: List[int], data_type: str, tailrisk_rolling: int = 12) -> None:
-    # nc_skewt
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    axes = axes.flatten()
+#Helper: skewness+ tail thickness grids
+#-----------------------------
+def plot_skew_and_tailrisk(data: Dict[str, Dict[int, pd.DataFrame]], models_compare: List[str], horizons: List[int], data_type: str, tailrisk_rolling: int= 12) -> None:
+    #setup 2x2 grid for skewness proxy over time
+    fig, axes= plt.subplots(2, 2, figsize=(16, 10))
+    axes= axes.flatten()
 
     for idx, h in enumerate(horizons):
-        ax = axes[idx]
-        any_line = False
+        ax= axes[idx]
+        any_line= False
         for model in models_compare:
-            dfh = data.get(model, {}).get(h)
+            #extract data for horizon
+            dfh= data.get(model, {}).get(h)
             if dfh is None or "nc_skewt" not in dfh.columns:
                 continue
-            nc = pd.to_numeric(dfh["nc_skewt"], errors="coerce")
+            #convert nc parameter to numeric
+            nc= pd.to_numeric(dfh["nc_skewt"], errors="coerce")
+            #apply rolling mean if requested for smoothing
             if tailrisk_rolling and tailrisk_rolling > 1:
-                nc = nc.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+                nc= nc.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+            #plot smoothed skewness line
             ax.plot(nc.index, nc.values, linewidth=2.0, label=model)
-            any_line = True
+            any_line= True
 
+        #label individual horizon subplots
         ax.set_title(f"Skewness proxy (nc_skewt) – {data_type} – h={h}m", fontweight="bold")
         ax.set_ylabel("nc_skewt")
         ax.grid(True, alpha=0.25)
         if any_line:
             ax.legend()
-
+    #turn off unused axes in 2x2 grid
     for k in range(len(horizons), 4):
         axes[k].axis("off")
     plt.tight_layout()
     plt.show()
-
-    # df_skewt
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    axes = axes.flatten()
+    #setup grid for tail thickness proxy
+    fig, axes= plt.subplots(2, 2, figsize=(16, 10))
+    axes= axes.flatten()
 
     for idx, h in enumerate(horizons):
-        ax = axes[idx]
-        any_line = False
+        ax= axes[idx]
+        any_line= False
         for model in models_compare:
-            dfh = data.get(model, {}).get(h)
+            dfh= data.get(model, {}).get(h)
             if dfh is None or "df_skewt" not in dfh.columns:
                 continue
-            nu = pd.to_numeric(dfh["df_skewt"], errors="coerce")
+            #convert degrees of freedom to numeric
+            nu= pd.to_numeric(dfh["df_skewt"], errors="coerce")
+            #apply smoothing to tail thickness
             if tailrisk_rolling and tailrisk_rolling > 1:
-                nu = nu.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+                nu= nu.rolling(tailrisk_rolling, min_periods=tailrisk_rolling).mean()
+            #plot smoothed tail thickness
             ax.plot(nu.index, nu.values, linewidth=2.0, label=model)
-            any_line = True
+            any_line= True
 
+        #label subplot for current horizon
         ax.set_title(f"Tail thickness proxy (df_skewt) – {data_type} – h={h}m", fontweight="bold")
         ax.set_ylabel("df_skewt (lower=fatter tails)")
         ax.grid(True, alpha=0.25)
         if any_line:
             ax.legend()
-
+    #clean up unused plots
     for k in range(len(horizons), 4):
         axes[k].axis("off")
     plt.tight_layout()
     plt.show()
 
 
-# -----------------------------
-# Helper: Feature importance (table + bar plot + optional CSV)
-# Uses your existing shap_feature_importance(df)
-# -----------------------------
-def feature_importance_table_and_plot(
-    data: Dict[str, Dict[int, pd.DataFrame]],
-    model: str,
-    horizons: List[int],
-    data_type: str,
-    out_dir: Optional[Path] = None,
-    top_n: int = 20,
-) -> None:
-    all_rows = []
-
+#Helper: Feature importance (table + bar plot + optional CSV)
+#-----------------------------
+def feature_importance_table_and_plot(data: Dict[str, Dict[int, pd.DataFrame]], model: str, horizons: List[int], data_type: str, out_dir: Optional[Path]= None, top_n: int= 20) -> None:
+    #initialize row collector for summary table
+    all_rows= []
     for h in horizons:
-        df = data.get(model, {}).get(h)
+        #get model results for horizon
+        df= data.get(model, {}).get(h)
         if df is None:
             continue
-
-        imp = shap_feature_importance(df)
+        #calculate mean absolute shap for ranking
+        imp= shap_feature_importance(df)
         if imp.empty:
+            #warn if no shap columns identified
             print(f"[WARN] No projected feature SHAP columns for {model} h={h}m")
             continue
-
-        imp["Model"] = model
-        imp["Target"] = data_type
-        imp["Horizon"] = h
+        #add experiment metadata to importance dataframe
+        imp["Model"]= model
+        imp["Target"]= data_type
+        imp["Horizon"]= h
         all_rows.append(imp)
-
-        # --- bar plot (top N)
-        imp_top = imp.head(top_n).copy()
+        #take top features for visual summary
+        imp_top= imp.head(top_n).copy()
         plt.figure(figsize=(10, 6))
+        #invert y axis so most important is at top
         plt.barh(imp_top["Feature"][::-1], imp_top["MeanAbsSHAP"][::-1])
+        #label plot with model and data type info
         plt.title(f"Feature importance (mean |SHAP|) – {data_type} – {model} – h={h}m", fontweight="bold")
         plt.xlabel("Mean |SHAP|")
         plt.ylabel("Feature")
         plt.tight_layout()
         plt.show()
 
-    # --- combined table + export
+    #combined table + export
     if not all_rows:
         return
-
-    table = pd.concat(all_rows, ignore_index=True)
-
-    # print a compact view
+    #stack importance results for all horizons
+    table= pd.concat(all_rows, ignore_index=True)
+    #print compact view to console for review
     for h in horizons:
-        sub = table[table["Horizon"] == h].sort_values("MeanAbsSHAP", ascending=False).head(top_n)
+        #sort by magnitude of impact
+        sub= table[table["Horizon"] == h].sort_values("MeanAbsSHAP", ascending=False).head(top_n)
         if sub.empty:
             continue
         print(f"\n=== FEATURE IMPORTANCE TABLE (Top {top_n}) | {data_type} | {model} | h={h}m ===")
+        #display top n features
         print(sub[["Feature", "MeanAbsSHAP", "MeanSHAP"]].to_string(index=False))
-
+    #handle file export if directory provided
     if out_dir is not None:
+        #ensure output folder exists
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"feature_importance_{model}_{data_type}.csv"
+        #set filename with model and target info
+        out_path= out_dir / f"feature_importance_{model}_{data_type}.csv"
+        #save full importance table
         table.to_csv(out_path, index=False)
         print(f"[INFO] Saved feature importance table: {out_path}")
 
 
-# ============================================================
-# REVISED main()
-# ============================================================
+
+#main()
+#-----------------
 def main() -> None:
+    #set seaborn theme for plot aesthetics
     sns.set_theme(style="whitegrid")
 
-    script_dir = Path(__file__).resolve().parent
-    project_root = find_project_root(script_dir)
-
-    results_dir = project_root / "Code" / "Results"
+    #get path to current script
+    script_dir= Path(__file__).resolve().parent
+    #find main project folder root
+    project_root= find_project_root(script_dir)
+    #verify results directory exists
+    results_dir= project_root /"Code" /"Results"
     if not results_dir.exists():
         raise FileNotFoundError(f"Results directory not found: {results_dir}")
+    #find path to yoy inflation actuals
+    actuals_path= find_actuals_file(project_root)
+    #print path info for log
+    print(f"Project root: {project_root}")
+    print(f"Results dir  : {results_dir}")
+    print(f"Actuals file : {actuals_path}")
 
-    actuals_path = find_actuals_file(project_root)
-    print(f"[INFO] Project root: {project_root}")
-    print(f"[INFO] Results dir  : {results_dir}")
-    print(f"[INFO] Actuals file : {actuals_path}")
+    #load ground truth data for data_type (Core/Headline)
+    actuals= load_actuals(actuals_path, data_type)
 
-    actuals = load_actuals(actuals_path, data_type)
-
-    # load stationary features (optional)
+    #load stationary features (optional step for feature names)
     try:
-        feats_path = find_stationary_features_file(project_root)
-        X, feature_list = load_stationary_features(feats_path)
-        print(f"[INFO] Stationary features file: {feats_path}")
-        print(f"[INFO] Features loaded: {len(feature_list)}")
+        feats_path= find_stationary_features_file(project_root)
+        X, feature_list= load_stationary_features(feats_path)
+        print(f"Stationary features file: {feats_path}")
+        print(f"Features loaded: {len(feature_list)}")
     except Exception as e:
-        X = None
-        print(f"[WARN] Could not load stationary features: {e}")
+        X= None
+        print(f"Could not load stationary features: {e}")
 
-    # ---- scan for forecast CSVs (unchanged behaviour)
-    data: Dict[str, Dict[int, pd.DataFrame]] = {m: {} for m in models_compare}
+    #scan for forecast CSVs
+    #initialize results dictionary mapping model to horizon dataframes
+    data: Dict[str, Dict[int, pd.DataFrame]]= {m: {} for m in models_compare}
+    #set directories to scan for results
+    scan_roots= [results_dir] if not results_subfolder else [(results_dir /s) for s in results_subfolder]
 
-    scan_roots = [results_dir] if not results_subfolder else [(results_dir / s) for s in results_subfolder]
-
-    found: List[FileMeta] = []
+    #list to store metadata for valid result files
+    found: List[FileMeta]= []
     for root in scan_roots:
         if not root.exists():
             continue
+        #recursively search for csv files
         for p in root.rglob("*.csv"):
-            meta = parse_filename(p, models_compare)
+            #parse metadata from filename
+            meta= parse_filename(p, models_compare)
             if meta is None:
                 continue
+            #filter for requested data type and horizons
             if meta.variable != data_type:
                 continue
             if meta.horizon not in horizons:
                 continue
+            #add to found list if matches criteria
             found.append(meta)
 
+    #raise error if no data located
     if not found:
-        raise RuntimeError(
-            "No matching forecast CSVs found.\n"
-            f"Check filenames contain Core/Headline, 3m/6m/9m/12m, and one of {models_compare}"
-        )
+        raise RuntimeError("No matching forecast CSVs found.\n"
+            f"Check filenames contain Core/Headline, 3m/6m/9m/12m, and one of {models_compare}")
 
-    errors = []
+    #tracker for load errors
+    errors= []
     for meta in found:
         try:
-            df = load_forecast(meta.path, actuals)
-            data[meta.model_key][meta.horizon] = df
+            #load forecast and join with actuals
+            df= load_forecast(meta.path, actuals)
+            #store in nested dictionary
+            data[meta.model_key][meta.horizon]= df
         except Exception as e:
+            #log file path and error message
             errors.append((meta.path, str(e)))
 
-    print("\n[INFO] Loaded horizons per model:")
+    #summary of loaded results
+    print("\nLoaded horizons per model:")
     for m in models_compare:
         print(f"  - {m}: {sorted(data[m].keys())}")
 
+    #display loading warnings if any
     if errors:
-        print("\n[WARN] Some files failed to load (showing up to 15):")
+        print("\nSome files failed to load (showing up to 15):")
         for p, msg in errors[:15]:
             print(f"  - {p}: {msg}")
-
-    # ---- load PCA weights using explicit mapping
-    pca_weights_by_model: Dict[str, pd.DataFrame] = {}
-    fs_dir = results_dir / "Factor_Summaries"
+    #load PCA weights using explicit mapping
+    pca_weights_by_model: Dict[str, pd.DataFrame]= {}
+    fs_dir= results_dir / "Factor_Summaries"
     for model, fname in PCA_FACTOR_FILES.items():
-        path = fs_dir / fname
+        path= fs_dir / fname
         if not path.exists():
-            print(f"[WARN] PCA weights file not found for {model}: {path}")
+            print(f"PCA weights file not found for {model}: {path}")
             continue
         try:
-            pca_weights_by_model[model] = load_pca_weights(path)
-            print(f"[INFO] Loaded PCA weights for {model}: {path}")
+            #load loading matrix for factor projection
+            pca_weights_by_model[model]= load_pca_weights(path)
+            print(f"Loaded PCA weights for {model}: {path}")
         except Exception as e:
-            print(f"[WARN] Failed loading PCA weights for {model}: {e}")
+            print(f"Failed loading PCA weights for {model}: {e}")
 
-    # ---- PCA post-pass projection (adds Shap_<Variable>)
+    #PCA post-pass projection (adds Shap_<Variable>)
     for model, w in pca_weights_by_model.items():
         for h in horizons:
-            df = data.get(model, {}).get(h)
+            #get dataframe for current model-horizon
+            df= data.get(model, {}).get(h)
             if df is None:
                 continue
+            #skip if dataframe does not contain factor shap columns
             if not is_pca_shap_df(df):
                 continue
-            data[model][h] = project_factor_shap_to_variables(df, w, target=data_type, horizon=h)
+            #project factor shap back to raw variable shap
+            data[model][h]= project_factor_shap_to_variables(df, w, target=data_type, horizon=h)
 
-    # ---- FEATURE IMPORTANCE PRINT (for PCA model)
+    #feature importance for PCA
     for model in models_compare:
         if model not in pca_weights_by_model:
             continue
         for h in horizons:
-            df = data.get(model, {}).get(h)
+            df= data.get(model, {}).get(h)
             if df is None:
                 continue
-            imp = shap_feature_importance(df)
+            #calc mean absolute shapley values
+            imp= shap_feature_importance(df)
             print(f"\n=== FEATURE IMPORTANCE | {data_type} | {model} | h={h}m ===")
             if imp.empty:
-                print("  [WARN] No projected feature SHAP columns found.")
+                print("  No projected feature SHAP columns found.")
             else:
+                #display top features in console
                 print(imp.head(25).to_string(index=False))
 
-    # -----------------------------
-    # 1) PIT CALIBRATION GRID
-    # -----------------------------
-    fig, axes = plt.subplots(
-        nrows=len(horizons),
-        ncols=len(models_compare),
-        figsize=(16, 18),
-        sharex=True, sharey=True,
-    )
-
+    #1) PIT CALIBRATION GRID
+    #-----------------------------
+    #setup grid of plots for ecdf comparison
+    fig, axes= plt.subplots(nrows=len(horizons), ncols=len(models_compare), figsize=(16, 18), sharex=True, sharey=True)
     for i, h in enumerate(horizons):
         for j, model in enumerate(models_compare):
-            ax = axes[i, j]
-            df = data.get(model, {}).get(h)
-
+            ax= axes[i, j]
+            df= data.get(model, {}).get(h)
+            #standardize axis limits for probability space
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
             ax.grid(True, alpha=0.25)
-
-            if i == 0:
+            #set row/column titles
+            if i== 0:
                 ax.set_title(model, fontweight="bold")
-            if j == 0:
+            if j== 0:
                 ax.set_ylabel(f"h={h}m\nECDF(PIT)", fontweight="bold")
-            if i == len(horizons) - 1:
+            if i== len(horizons) - 1:
                 ax.set_xlabel("PIT")
-
+            #check for pit column existence
             if df is None or PIT_COL not in df.columns:
                 ax.text(0.5, 0.5, "No PIT", ha="center", va="center")
                 continue
 
-            pit = pd.to_numeric(df[PIT_COL], errors="coerce").dropna().clip(0, 1).values
+            #extract and clean pit values
+            pit= pd.to_numeric(df[PIT_COL], errors="coerce").dropna().clip(0, 1).values
             if pit.size < 5:
                 ax.text(0.5, 0.5, "Too few PITs", ha="center", va="center")
                 continue
-
-            pit_sorted = np.sort(pit)
-            n = pit_sorted.size
-            y = np.arange(1, n + 1) / n
-
+            #calculate ecdf for pit distribution
+            pit_sorted= np.sort(pit)
+            n= pit_sorted.size
+            y= np.arange(1, n+1)/n
+            #plot empirical cdf against uniform diagonal
             ax.plot(pit_sorted, y, linewidth=1.8)
             ax.plot([0, 1], [0, 1], linestyle="--", linewidth=1.5)
-
-            eps = dkw_band(n, alpha=0.05)
-            u = np.linspace(0, 1, 300)
+            #add dkw confidence bands
+            eps= dkw_band(n, alpha=0.05)
+            u= np.linspace(0, 1, 300)
             ax.plot(u, np.clip(u - eps, 0, 1), linestyle="--", linewidth=1.0)
             ax.plot(u, np.clip(u + eps, 0, 1), linestyle="--", linewidth=1.0)
-
+    #finalize calibration grid figure
     plt.suptitle(f"PIT Calibration – {data_type}", fontsize=16, fontweight="bold", y=1.01)
     plt.tight_layout()
     plt.show()
 
-    # -----------------------------
-    # 2) ROLLING CRPS (2x2)
-    # -----------------------------
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    axes = axes.flatten()
 
+    #2) ROLLING CRPS (2x2)
+    #-----------------------------
+    #setup grid for performance over time
+    fig, axes= plt.subplots(2, 2, figsize=(16, 10))
+    axes= axes.flatten()
     for idx, h in enumerate(horizons):
-        ax = axes[idx]
-        any_line = False
-
+        ax= axes[idx]
+        any_line= False
         for model in models_compare:
-            df = data.get(model, {}).get(h)
+            df= data.get(model, {}).get(h)
             if df is None or crps_col not in df.columns:
                 continue
-
-            s = pd.to_numeric(df[crps_col], errors="coerce")
-            roll = s.rolling(window=rolling_window, min_periods=rolling_window).mean()
+            #calc rolling mean of crps score
+            s= pd.to_numeric(df[crps_col], errors="coerce")
+            roll= s.rolling(window=rolling_window, min_periods=rolling_window).mean()
+            #plot line for each model
             ax.plot(roll.index, roll.values, linewidth=2.0, label=model)
-            any_line = True
+            any_line= True
 
+        #label performance plots
         ax.set_title(f"{data_type} – Rolling {crps_col} (w={rolling_window}) – h={h}m", fontweight="bold")
         ax.set_ylabel("Rolling mean CRPS")
         ax.grid(True, alpha=0.25)
         if any_line:
             ax.legend()
-
+    #hide unused axes if horizons < 4
     for k in range(len(horizons), 4):
         axes[k].axis("off")
 
     plt.tight_layout()
     plt.show()
 
-    # -----------------------------
-    # 9) SHAP VARIABLE HEATMAP (use projected features for PCA models)
-    # -----------------------------
+
+    #9) SHAP VARIABLE HEATMAP
+    #-----------------------------
     for model in models_compare:
         for h in horizons:
-            df = data.get(model, {}).get(h)
+            df= data.get(model, {}).get(h)
             if df is None:
                 continue
-
-            # Use projected feature SHAP if available for PCA models, else fall back to all SHAP
+            #select projected columns for pca models, raw for others
             if model in pca_weights_by_model:
-                shap_cols = get_projected_feature_shap_cols(df)
+                shap_cols= get_projected_feature_shap_cols(df)
             else:
-                shap_cols = shap_columns(df)
-
+                #standard feature shap if no pca used
+                shap_cols= shap_columns(df)
             if not shap_cols:
-                print(f"[WARN] Heatmap skipped (no SHAP columns) – {model} – h={h}m")
+                print(f"Heatmap skipped (no SHAP columns) – {model} – h={h}m")
                 continue
-
-            S = df[shap_cols].copy()
-
-            # resample
+            #slice shap columns
+            S= df[shap_cols].copy()
+            #resample frequency if specified in config
             if shap_heatmap_freq:
                 try:
-                    S = S.resample(shap_heatmap_freq).mean()
+                    S= S.resample(shap_heatmap_freq).mean()
                 except Exception:
                     pass
-
-            # ranking
+            #determine ranking based on configured importance metric
             if shap_heatmap_value == "abs":
-                rank = S.abs().mean().sort_values(ascending=False)
-                S_plot = S.abs()
-                title_val = "|SHAP|"
+                #rank by mean absolute impact
+                rank= S.abs().mean().sort_values(ascending=False)
+                S_plot= S.abs()
+                title_val= "|SHAP|"
             else:
-                rank = S.mean().abs().sort_values(ascending=False)
-                S_plot = S
-                title_val = "SHAP"
-
-            top_cols = list(rank.head(shap_heatmap_top_n).index)
-            S_plot = S_plot[top_cols]
-
+                #rank by signed impact
+                rank= S.mean().abs().sort_values(ascending=False)
+                S_plot= S
+                title_val= "SHAP"
+            #filter for top n variables to show in heatmap
+            top_cols= list(rank.head(shap_heatmap_top_n).index)
+            S_plot= S_plot[top_cols]
             if S_plot.empty:
-                print(f"[WARN] Heatmap skipped (empty after ranking) – {model} – h={h}m")
+                print(f"Heatmap skipped (empty after ranking) – {model} – h={h}m")
                 continue
-
-            S_plot = S_plot.rename(columns={c: shap_suffix(c) for c in S_plot.columns})
-
+            #clean column names for plot labels
+            S_plot= S_plot.rename(columns={c: shap_suffix(c) for c in S_plot.columns})
+            #render heatmap of variable influence over time
             plt.figure(figsize=(14, 8))
             sns.heatmap(S_plot.T, cmap="viridis")
-            plt.title(
-                f"SHAP Variable Heatmap ({title_val}) – {data_type} – {model} – h={h}m\n"
-                f"Top {min(shap_heatmap_top_n, len(top_cols))} vars | resample={shap_heatmap_freq}",
-                fontweight="bold"
-            )
+            plt.title( f"SHAP Variable Heatmap ({title_val}) – {data_type} – {model} – h={h}m\n"
+                f"Top {min(shap_heatmap_top_n, len(top_cols))} vars | resample={shap_heatmap_freq}", fontweight="bold")
             plt.xlabel("Target date (resampled)")
             plt.ylabel("Variable")
             plt.tight_layout()
             plt.show()
-                
-            # (A) Average CRPS bar
-            plot_avg_crps_bar(data, models_compare, horizons, crps_col, data_type)
 
-            # (B) Fan charts
-            plot_fan_chart_grid(data, models_compare, horizons, data_type)
+    #further output plots
+    #-----------------------------
+    #average crps bar chart
+    plot_avg_crps_bar(data, models_compare, horizons, crps_col, data_type)
+    #fan charts for forecast distributions
+    plot_fan_chart_grid(data, models_compare, horizons, data_type)
+    #density comparison for latest forecast origin
+    default_h= horizons[0]
+    df0= data.get(models_compare[0], {}).get(default_h)
+    if df0 is not None and "Date" in df0.columns:
+        latest_origin= pd.to_datetime(df0["Date"]).max()
+        plot_density_for_origin(data, models_compare, latest_origin, default_h, data_type)
+    else:
+        print("Skipping density plot (missing Date column or missing data).")
 
-            # (C) Density comparison for latest origin date (uses first model + first horizon)
-            default_h = horizons[0]
-            df0 = data.get(models_compare[0], {}).get(default_h)
-            if df0 is not None and "Date" in df0.columns:
-                latest_origin = pd.to_datetime(df0["Date"]).max()
-                plot_density_for_origin(data, models_compare, latest_origin, default_h, data_type)
-            else:
-                print("[WARN] Skipping density plot (missing Date column or missing data).")
-
-            # (D) Skewness + tail thickness charts
-            plot_skew_and_tailrisk(data, models_compare, horizons, data_type, tailrisk_rolling=tailrisk_rolling)
-
-            # (E) Feature importance: table + bar plots + CSV export
-            pca_model = "QRF_Default_Lin_Feat_PCA"
-            feature_importance_table_and_plot(
-                data=data,
-                model=pca_model,
-                horizons=horizons,
-                data_type=data_type,
-                out_dir=results_dir / "Interpretability",  # set None if you don't want files saved
-                top_n=20
-            )
-
+    #skewness and tail-risk evolution over time
+    plot_skew_and_tailrisk(data, models_compare, horizons, data_type, tailrisk_rolling=tailrisk_rolling)
+    #detailed feature importance analysis and csv export
+    pca_model= "QRF_Default_Lin_Feat_PCA"
+    feature_importance_table_and_plot(data=data, model=pca_model, horizons=horizons, data_type=data_type, out_dir=results_dir / "Interpretability", top_n=20)
+#run main execution loop
 if __name__ == "__main__":
     main()
 
