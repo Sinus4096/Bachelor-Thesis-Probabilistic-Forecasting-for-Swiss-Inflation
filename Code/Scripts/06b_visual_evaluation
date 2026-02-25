@@ -13,7 +13,7 @@ from scipy.stats import nct
 #config
 #-----------------------------
 #select inflation measure for analysis
-data_type= "Core"
+data_type= "Headline"  #options: "Headline" or "Core"
 #define horizons 
 horizons= [3, 6, 9, 12]
 #set window size for moving average metrics
@@ -21,7 +21,7 @@ rolling_window= 36
 #column name for continuous ranked probability score
 crps_col= "Parametric_CRPS"
 #list of models to include in comparative summary
-models_compare= ["Benchmark_ARGARCH", "bvar_independent_niw_hierarchical", "QRF_Default"]
+models_compare= ["bvar_independent_niw_hierarchical", "bvar_natural_niw_hierarchical", "bvar_minnesota"]
 #initialize empty list for subfolder paths
 results_subfolder: List[str]= []
 #max number of features to show in shapley plots
@@ -33,7 +33,7 @@ shap_heatmap_value= "abs"
 #rolling window for downside risk metrics
 tailrisk_rolling= 12
 #dictionary to link model keys with specific factor loading files
-PCA_FACTOR_FILES= {"QRF_Default_Lin_Feat_PCA": "Factor_Summary_QRF_Default_LFeat_PCA.csv"}
+PCA_FACTOR_FILES= {"bvar_independent_niw_hierarchical":"Factor_Summary_bvar_independent_niw_PCA.csv","QRF_Default_PCA": "Factor_Summary_QRF_Default_PCA.csv"}
 
 
 #column aliases (new schema)
@@ -255,7 +255,7 @@ def shap_suffix(col: str) -> str:
 # PCA-> variable backprojection
 #---------------------------------------
 #regex to identify factor-based shap columns from pca models
-pca_factor_re = re.compile(r"^SHAP_(Factor_\d+)$", re.IGNORECASE)
+pca_factor_re = re.compile(r"^SHAP_(Factor_\d+)(?:_lag(\d+))?$", re.IGNORECASE)
 
 def load_pca_weights(path: Path) -> pd.DataFrame:
     #read weights file mapping factors back to raw variables

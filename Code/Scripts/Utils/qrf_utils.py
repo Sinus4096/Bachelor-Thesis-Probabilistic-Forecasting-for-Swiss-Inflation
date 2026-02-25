@@ -1,3 +1,4 @@
+from pyparsing import alphas
 from sklearn.decomposition import PCA
 import pandas as pd
 import numpy as np
@@ -7,6 +8,7 @@ from sklearn.linear_model import ElasticNetCV, RidgeCV
 from sklearn.base import clone
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
 
 #PCA
 #-----------------------
@@ -132,160 +134,85 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
 
 #linear features
 #----------------------------------
-def generate_linear_feature_oof(df, target_col, target_cols_to_drop, h, config, use_pca=False, window_size=120, min_train=40):
+import numpy as np
+import pandas as pd
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import ElasticNetCV
+from sklearn.model_selection import TimeSeriesSplit, cross_val_predict
+
+def _feasible_tscv(n: int, gap: int, max_splits: int = 5):
+    # conservative test_size
+    test_size = max(6, min(12, n // 6))
+    # feasibility: n >= (n_splits+1)*test_size + n_splits*gap
+    max_possible = int((n - test_size) // (test_size + gap))
+    n_splits = max(2, min(max_splits, max_possible))
+    if n_splits < 2:
+        return None
+    return TimeSeriesSplit(n_splits=n_splits, gap=gap, test_size=test_size)
+
+def fit_enet_mean_and_residuals(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    h: int,
+    pub_lag: int = 2,
+    max_splits: int = 5,
+):
     """
-    lin pred with walk forward approach, and pca if requestesd"""
-    #initialize bundle for pca objects to be reused
-    pca_bundle= None
-    #drop the target related columns to get feature matrix
-    X_full=df.drop(columns=target_cols_to_drop) 
-    #isolate the target column for training
-    y_full= df[target_col] 
-    #initialize empty series for predictions with same index
-    preds=pd.Series(index=df.index, dtype=float) 
-    #ts splits def
-    n_eff=len(y_full)
-    #5 splits only if have enough data
-    n_splits_eff =min(5, max(2, n_eff //15))  
-    #set gap for cv to avoid using future info in short horizons
-    cv_gap= 0 if h >= 6 else h   
-    #setup time series split object for cross validation
-    tscv =TimeSeriesSplit(n_splits=n_splits_eff, gap=cv_gap)
-    
-    #check if pca reduction is requested
-    if use_pca: 
-        #get columns to be reduced vs columns to keep as-is
-        pca_cols, keep_cols= get_pca(df_columns=X_full.columns, target_cols_to_drop=[], target_name=None,  config=config)
-        #only fit pca if it hasn't been initialized yet
-        if use_pca and pca_bundle is None:
-            #Fit PCA ONCE on full available sample (or better: first training window)
-            scaler_full= StandardScaler()
-            #determine end of the first training sample for pca fit
-            initial_train_end= min_train
-            #slice initial data to avoid look-ahead bias in factor construction
-            X_initial= X_full.iloc[:initial_train_end]
-            #fit and transform the pca subset
-            Z_full= scaler_full.fit_transform(X_initial[pca_cols])
-            #determine number of factors r based on explained variance (see config)
-            r= choose_r_from_train_std(Z_full, config)
-            #initialize pca model with r components
-            pca_full= PCA(n_components=r)
-            #fit the pca model on the standardized data
-            pca_full.fit(Z_full)
+    Returns:
+      y_resid_train: cross-fitted residuals on training window (Series)
+      mean_test: scalar mean prediction at X_test (float)
+      mean_train_cf: cross-fitted mean predictions on training window (Series)
+    """
+    # force numeric and align
+    X_train = X_train.apply(pd.to_numeric, errors="coerce")
+    X_test = X_test.apply(pd.to_numeric, errors="coerce")
 
-            #sign stabilization (ensure first load is positive for interpretability)
-            for j in range(pca_full.components_.shape[0]):
-                if pca_full.components_[j, 0] < 0:
-                    #flip sign of component if negative
-                    pca_full.components_[j, :]*= -1
+    # drop NaNs in y; align X
+    y_train = y_train.dropna()
+    X_train = X_train.loc[y_train.index]
 
-            #store objects in bundle to use in the walk-forward loop
-            pca_bundle= {"scaler": scaler_full, "pca": pca_full, "r": r}
+    if len(y_train) < 40 or y_train.std() == 0:
+        # not enough signal -> fallback mean=0, residual=y
+        mean_test = 0.0
+        mean_train_cf = pd.Series(0.0, index=y_train.index)
+        return (y_train - mean_train_cf), mean_test, mean_train_cf
 
-    #if no pca use all columns as keep columns
-    else: 
-        #no pca columns selected
-        pca_cols=[] 
-        #all features are treated as keep_cols
-        keep_cols= list(X_full.columns)         
-    #check if horizon is long term (for choosing grid in config)
-    if h>= 12: 
-        #use higher alpha grid for long horizons (more regularization)
-        enet= ElasticNetCV(l1_ratio=[0.01, 0.03, 0.05, 0.10, 0.20], alphas=np.logspace(-3, 2.5, 60), cv=tscv, n_jobs=-1,max_iter=1_000_000, tol=1e-4)
-    #else use short term grid
-    else: 
-        #standard alpha grid for short horizons
-        enet= ElasticNetCV(l1_ratio=[0.05, 0.10, 0.20, 0.35, 0.50], alphas=[0.1,0.5, 1.0,25, 10.0, 50.0], cv=tscv, n_jobs=-1, max_iter=1_000_000, tol=1e-4)
-    
-    #initialize the standard scaler for feature normalization
-    scaler= StandardScaler() 
-    #loop through every time step in the dataframe: walk fwd approach so no data leakage
-    for i in range(len(df)):         
-        #define the end of the training window based on horizon h
-        train_end_idx=i-h         
-        #ensure we have enough data to train
-        if train_end_idx < min_train: 
-            #set prediction to zero if data is insufficient (early observations)
-            preds.iloc[i]= 0.0 
-            #skip to next iteration
-            continue 
-        #calculate start index for rolling window (based on window_size in config)
-        train_start_idx=max(0, train_end_idx -window_size)        
-        #slice feature matrix for training window
-        X_train_raw=X_full.iloc[train_start_idx : train_end_idx +1] 
-        #slice target vector for  training window
-        y_train= y_full.iloc[train_start_idx : train_end_idx +1] 
-        #slice current feature row for testing 
-        X_test_raw= X_full.iloc[[i]]         
-        #identify non-NaN values in the target
-        valid_mask= ~y_train.isna() 
-        #remove NaNs from training target
-        y_train_clean=y_train[valid_mask] 
-        #remove corresponding rows from training features
-        X_train_clean= X_train_raw[valid_mask]         
-        #validate if enough samples remain for CV and check variance
-        if len(y_train_clean) <(n_splits_eff +2) or y_train_clean.std()== 0: 
-            #default to zero if training is impossible (no variance)
-            preds.iloc[i]= 0.0 
-            #skip to next iteration
-            continue 
+    gap = h + pub_lag
+    cv = _feasible_tscv(len(y_train), gap=gap, max_splits=max_splits)
 
-        #check for pca path to transform features into factors
-        if use_pca: 
-            #handle columns that skip pca (e.g. dummies or specific indicators)
-            if len(keep_cols) > 0: 
-                #extract values for keep columns in train
-                X_train_keep= X_train_clean[keep_cols].values 
-                #extract values for keep columns in test
-                X_test_keep=X_test_raw[keep_cols].values 
-            #else initialize empty arrays for stacking logic
-            else: 
-                #create empty train array for hstack
-                X_train_keep= np.empty((len(X_train_clean), 0)) 
-                #create empty test array for hstack
-                X_test_keep= np.empty((len(X_test_raw), 0)) 
+    # If CV is not feasible, fallback to 2 splits with tiny test_size and gap,
+    # otherwise just do simple fit and accept in-sample preds
+    alphas = np.logspace(-4, 1.5, 60)
+    l1_ratio = [0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 0.95]
 
-            #handle columns requiring pca (factor estimation)
-            if len(pca_cols) > 0: 
-                #get scaler from bundle to ensure consistent transformation
-                scaler_full= pca_bundle["scaler"]
-                #get fitted pca object from bundle
-                pca_full= pca_bundle["pca"]
-                #standardize train data based on pre-fitted scaler
-                X_train_std= scaler_full.transform(X_train_clean[pca_cols])
-                #project train data onto principal components
-                F_train= pca_full.transform(X_train_std)
-                #standardize test data
-                X_test_std= scaler_full.transform(X_test_raw[pca_cols])
-                #project test data onto factors
-                F_test= pca_full.transform(X_test_std)
-                #horizontally stack keep features and factors for train
-                X_train_final= np.hstack([X_train_keep, F_train]) 
-                X_test_final= np.hstack([X_test_keep, F_test]) 
-            #if no pca columns just use keep columns for final matrix
-            else: 
-                #final train is just keep
-                X_train_final= X_train_keep 
-                #final test is just keep
-                X_test_final= X_test_keep 
+    model = Pipeline([
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("enet", ElasticNetCV(
+            l1_ratio=l1_ratio,
+            alphas=alphas,
+            cv=cv if cv is not None else 3,
+            n_jobs=-1,
+            max_iter=1_000_000,
+            tol=1e-4,
+        )),
+    ])
 
-        #path for raw feature scaling (if pca is disabled)
-        else: 
-            #fit and transform train features with standard scaling
-            X_train_final= scaler.fit_transform(X_train_clean) 
-            #transform test features using train scaling parameters (avoiding leakage)
-            X_test_final= scaler.transform(X_test_raw) 
+    if cv is not None:
+        # cross-fitted mean on train (prevents overfit residuals)
+        mean_train_cf = cross_val_predict(model, X_train, y_train, cv=cv, method="predict")
+        mean_train_cf = pd.Series(mean_train_cf, index=y_train.index)
+    else:
+        # last-resort: in-sample fit (less ideal but stable)
+        model.fit(X_train, y_train)
+        mean_train_cf = pd.Series(model.predict(X_train), index=y_train.index)
 
-        #create a fresh copy of the model for this window (reset weights)
-        m=clone(enet) 
-        #fit model on processed training data (factors or raw features)
-        m.fit(X_train_final, y_train_clean) 
-        #predict current step and store in series for later evaluation
-        preds.iloc[i]= m.predict(X_test_final)[0] 
+    # fit final mean model on full train for test prediction
+    model.fit(X_train, y_train)
+    mean_test = float(model.predict(X_test)[0])
 
-    #fill any remaining missing values with zero (stability check)
-    preds= preds.fillna(0.0) 
-    #return the full series of predictions for the current target/horizon
-    return preds
-
-
+    y_resid_train = y_train - mean_train_cf
+    return y_resid_train, mean_test, mean_train_cf

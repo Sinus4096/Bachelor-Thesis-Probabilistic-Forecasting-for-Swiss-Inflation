@@ -2,6 +2,7 @@ import sys
 import pandas as pd
 import numpy as np
 from scipy import stats
+from scipy.stats import nct
 import yaml
 import argparse
 from pathlib import Path
@@ -269,6 +270,11 @@ def run_experiment(config):
 
                 #calculate pit for calibration check
                 pit_direct= stats.nct.cdf(actual_direct, skew_params_direct[0], skew_params_direct[1], loc=skew_params_direct[2], scale=skew_params_direct[3])
+                #get distribution parameters for logpdf calculation
+                df_nct, nc_nct, loc_nct, scale_nct =skew_params_direct
+                logpdf_direct=float(nct.logpdf(actual_direct, df_nct, nc_nct, loc=loc_nct, scale=scale_nct))
+                #log predictive density (higher is better).
+                logS_direct = logpdf_direct
                 #calculate median and point forecast errors
                 median_direct= float(np.median(preds_draws))
                 rmse_direct= calculate_rmse(actual_direct, median_direct)
@@ -340,6 +346,15 @@ def run_experiment(config):
                         preds_draws_yoy_timesafe= base_effect_timesafe +preds_draws*scaling
                     else:
                         preds_draws_yoy_timesafe= None
+                
+                #initialize for quantile evaluation of time-safe yoy distribution
+                q05_yoy_timesafe =np.nan
+                q16_yoy_timesafe=np.nan
+                q84_yoy_timesafe= np.nan
+                q95_yoy_timesafe= np.nan
+                median_yoy_timesafe=np.nan                
+                violation_90_timesafe= np.nan       
+                upper_violation_95_timesafe = np.nan  
 
                 #calculate scores if time-safe distribution reconstructed successfully
                 if preds_draws_yoy_timesafe is not None:
@@ -350,18 +365,29 @@ def run_experiment(config):
                     #calc parametric and empirical yoy crps
                     crps_yoy_timesafe_parametric= calculate_crps(actual_yoy, skew_params_yoy)
                     crps_yoy_timesafe_empirical= calculate_crps_quantile(actual_yoy, yoy_fit_quantiles[None, :], eval_quantiles)
+                    #get quantiles 
+                    q05_yoy_timesafe=float(np.percentile(preds_draws_yoy_timesafe, 5))
+                    q16_yoy_timesafe= float(np.percentile(preds_draws_yoy_timesafe, 16))
+                    q84_yoy_timesafe= float(np.percentile(preds_draws_yoy_timesafe, 84))
+                    q95_yoy_timesafe= float(np.percentile(preds_draws_yoy_timesafe, 95))
+                    median_yoy_timesafe=float(np.median(preds_draws_yoy_timesafe))
+                    #Bool whether forecast falls outside 90% interval (from 5% and 95% quantiles)
+                    violation_90_timesafe=int((actual_yoy <q05_yoy_timesafe) or (actual_yoy >q95_yoy_timesafe))
+                    upper_violation_95_timesafe = int(actual_yoy> q95_yoy_timesafe)   #bool if actual > q95
+
                     #format empirical score
                     if hasattr(crps_yoy_timesafe_empirical, "__iter__"):
                         crps_yoy_timesafe_empirical= float(np.mean(crps_yoy_timesafe_empirical))
 
                 #bundle all metrics into results entry
                 results_entry= {'Date': forecast_date, 'Target_date': target_date, 'Actual_direct': float(actual_direct),
-                    'Forecast_median_direct': median_direct, 'CRPS_direct_parametric': float(crps_direct_parametric), 'CRPS_direct_empirical': float(crps_direct_empirical),
+                    'Forecast_median_direct': median_direct, 'CRPS_direct_parametric': float(crps_direct_parametric), 'CRPS_direct_empirical': float(crps_direct_empirical), "LogS_direct": logS_direct,
                     'RMSE_direct': float(rmse_direct), 'PIT_direct': float(pit_direct), 'df_skewt_direct': float(skew_params_direct[0]),
                     'nc_skewt_direct': float(skew_params_direct[1]), 'loc_skewt_direct': float(skew_params_direct[2]), 'scale_skewt_direct': float(skew_params_direct[3]),
                     'Actual_YoY': float(actual_yoy), 'Forecast_median_YoY': median_yoy, 'q05_YoY': q05_yoy, 'q16_YoY': q16_yoy, 'q84_YoY': q84_yoy,
                     'q95_YoY': q95_yoy, 'BaseEffect_YoY_expost': float(base_effect_expost), 'CRPS_YoY_timesafe_parametric': float(crps_yoy_timesafe_parametric) if np.isfinite(crps_yoy_timesafe_parametric) else np.nan,
-                    'CRPS_YoY_timesafe_empirical': float(crps_yoy_timesafe_empirical) if np.isfinite(crps_yoy_timesafe_empirical) else np.nan}
+                    'CRPS_YoY_timesafe_empirical': float(crps_yoy_timesafe_empirical) if np.isfinite(crps_yoy_timesafe_empirical) else np.nan, "q05_YoY_timesafe": q05_yoy_timesafe, "q16_YoY_timesafe": q16_yoy_timesafe, "q84_YoY_timesafe": q84_yoy_timesafe, "q95_YoY_timesafe": q95_yoy_timesafe,
+                    "Violation90_YoY_timesafe": violation_90_timesafe, "UpperViolation95_YoY_timesafe": upper_violation_95_timesafe}
 
                 #append direct space shap values
                 results_entry.update(final_shap_direct)
@@ -376,7 +402,7 @@ def run_experiment(config):
                 #set forecast origin as index
                 results_df.set_index('Date', inplace=True)
                 #construct unique filename for target and horizon
-                save_name= f"Results/Data_experiments_bvar2/{config['experiment_name']}_{target_name}_{h}m.csv"
+                save_name= f"Results/Data_experiments_bvar/{config['experiment_name']}_{target_name}_{h}m.csv"
                 #export result table
                 results_df.to_csv(save_name)
 

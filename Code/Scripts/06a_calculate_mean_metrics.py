@@ -3,7 +3,7 @@ import glob
 import os
 
 #define paths to  specific results folders (benchmarks and model variations)
-folders=['Results/Data_experiments_benchmark' ,'Results/Data_experiments_bvar2', 'Results/Data_experiments_qrf2']
+folders=['Results/Data_experiments_benchmark', 'Data_experiments_bvar']
 all_results = []  #initialize list to store dictionary of metrics
 #iterate through each experiment folder to collect results
 for folder in folders:
@@ -18,7 +18,8 @@ for folder in folders:
         df=pd.read_csv(path)
         #calculate mean scores and PIT statistics to compare method performance
         metrics = {'Folder': folder.split('/')[-1], 'File': file_name, 'Mean_Parametric_CRPS_direct': df['CRPS_direct_parametric'].mean(), 
-                   'Mean_Parametric_CRPS_YOY': df['CRPS_YoY_timesafe_parametric'].mean(), 'PIT_Mean': df['PIT_direct'].mean(), 'PIT_Std': df['PIT_direct'].std()}
+                   'Mean_Parametric_CRPS_YOY': df['CRPS_YoY_timesafe_parametric'].mean(), 'Mean_LogS_direct': df['LogS_direct'].mean(),
+                    'ViolationRate_90_YoY': df['Violation90_YoY_timesafe'].mean(),'UpperViolationRate_95_YoY': df['UpperViolation95_YoY_timesafe'].mean(), 'PIT_Mean': df['PIT_direct'].mean(), 'PIT_Std': df['PIT_direct'].std()}
         #append metrics to  results list
         all_results.append(metrics)
 

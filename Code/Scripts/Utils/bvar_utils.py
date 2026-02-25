@@ -225,7 +225,7 @@ class BVAR:
         T, N= Y.shape    #nr of equations and obs.
         K= self.n_features  #nr of features
 
-        #calc res variances from univariate ar for targets
+        #calc res variances from univariate ar for targets (PRIOR PROXY)
         sigmas= []  #to store scales
         for idx in range(N):
             #fit univariate ar to get residual std
@@ -264,8 +264,11 @@ class BVAR:
                 if cache_key in self._mn_tuned_cache:
                     best_lam, best_theta, best_decay= self._mn_tuned_cache[cache_key]
                 else:
-                    #best lambda=a1=a2 (match natural niw properties)
-                    lambda_grid= [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]  
+                    # FIX 1: EXPAND LAMBDA GRID
+                    # Your previous grid [0.0001 ... 0.02] was suffocating the model (forcing predictions to 0).
+                    # We add looser values (0.1, 0.5, 1.0) to let the data speak.
+                    lambda_grid= [0.001, 0.01, 0.05, 0.1, 0.5, 1.0]  
+                    
                     #aggressive lag decay
                     decay_grid= [2.0, 4.0, 6.0]  
                     theta_grid= [0.001, 0.003, 0.01, 0.03, 0.1] 
@@ -344,37 +347,55 @@ class BVAR:
                         ridge_penalty= ((sigma_j *lag_func) /(best_lam*best_theta))**2
 
                     P_diag[col_idx]= ridge_penalty
+                
                 #posterior precision
                 Post_Precision_i= XX + np.diag(P_diag) + np.eye(K) * 1e-6
 
-                #solve for beta using cholesky for speed/stability
+                # FIX 2: REVERT TO STANDARD SOLVER (Shrink to 0)
+                # We removed the Phi_prior logic. Stationary data should shrink to 0.
                 L_i= np.linalg.cholesky(Post_Precision_i)
                 w= np.linalg.solve(L_i, X.T @ Y[:, i])
                 phi_i= np.linalg.solve(L_i.T, w)
+                
                 #store coefficients
                 Phi_post_all[:, i]= phi_i
                 #covariance for sampling
                 L_inv= np.linalg.solve(L_i, np.eye(K))
                 Unscaled_Cov= L_inv.T @L_inv
                 V_post_list.append(Unscaled_Cov)
+            
+            # FIX 3: KEEP THE RESIDUAL SIGMA CALCULATION
+            # This is what fixed your S-shaped PIT. Do not remove this.
+            
+            # Calculate fitted values
+            Y_hat = X @ Phi_post_all
+            # Calculate actual residuals (in-sample error)
+            Residuals = Y - Y_hat
+            
+            # Calculate standard deviation of realized residuals
+            sigmas_posterior = np.std(Residuals, axis=0)
+            
+            # Ensure no zeros (sanity check)
+            sigmas_posterior = np.maximum(sigmas_posterior, 1e-6)
+
             #sampling             
-            Sigma_fixed= np.diag(sigmas**2)  #fixed sigma for forecast noise in minnesota setup           
-            self.sigma_draws= np.repeat(Sigma_fixed[None, :, :], n_draws, axis=0) #create sigma draws (constant across draws for this model)
+            # Use the FITTED sigmas for the forecast noise
+            Sigma_fixed= np.diag(sigmas_posterior**2)             
+            self.sigma_draws= np.repeat(Sigma_fixed[None, :, :], n_draws, axis=0) 
 
             #vectorized sampling of phi draws
             self.phi_draws= np.empty((n_draws, K, N))
             for i in range(N):
-                #posterior covariance for equation i coefficients
-                cov_i=(sigmas[i]**2) *V_post_list[i]
+                # Scale covariance by the ACTUAL residual variance (posterior), not the proxy
+                cov_i=(sigmas_posterior[i]**2) *V_post_list[i]
+                
                 #numerical jitter to ensure pd
                 cov_i= cov_i +np.eye(K) *1e-10
                 #draw coefficients via cholesky decomposition
                 L= np.linalg.cholesky(cov_i)
                 Z= np.random.standard_normal((n_draws, K))
                 #apply draw to phi draws storage
-                self.phi_draws[:, :, i]= Phi_post_all[:, i][None, :] + Z @ L.T
-                
-
+                self.phi_draws[:, :, i]= Phi_post_all[:, i][None, :]+Z@ L.T
                 
         #independent normal-inverse wishart prior
         #----------------------------------
@@ -406,12 +427,11 @@ class BVAR:
                     K= self.n_features
                     exog= self.n_exog
                     #set grids based on forecast horizon
-                    if horizon == 12:
+                    if horizon==12:
                         #wider grid for long term
                         lambda_grid= [0.05, 0.07, 0.09, 0.1, 0.2, 0.3]
                         theta_grid= [0.05, 0.1, 0.3, 0.5]
-                        decay_grid= [1.0, 1.5, 2.0]
-                    
+                        decay_grid= [1.0, 1.5, 2.0]                    
                     #standard grid for short term
                     else:
                         lambda_grid= [0.01, 0.03, 0.05, 0.07, 0.1]
