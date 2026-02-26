@@ -225,14 +225,14 @@ class BVAR:
         T, N= Y.shape    #nr of equations and obs.
         K= self.n_features  #nr of features
 
-        #calc res variances from univariate ar for targets (PRIOR PROXY)
+        #calc res variances from univariate ar for targets
         sigmas= []  #to store scales
         for idx in range(N):
             #fit univariate ar to get residual std
             res= np.diff(Y[:, idx])
             sigmas.append(np.std(res) if len(res)>0 else 0.1)
         sigmas= np.array(sigmas)
- 
+
         #extract feature columns before they were lagged
         feature_cols= [c for c in data.columns if 'target_' not in c]
         #get raw feature data (without lags) 
@@ -245,7 +245,7 @@ class BVAR:
             res= np.diff(feature_cols_raw[:, idx])
             sigmas_x_all.append(np.std(res) if len(res) > 0 else 0.1)
         sigmas_all= np.array(sigmas_x_all)
-        
+
         #minnesota config
         #-----------------
         if 'minnesota' in self.prior_type:
@@ -264,11 +264,8 @@ class BVAR:
                 if cache_key in self._mn_tuned_cache:
                     best_lam, best_theta, best_decay= self._mn_tuned_cache[cache_key]
                 else:
-                    # FIX 1: EXPAND LAMBDA GRID
-                    # Your previous grid [0.0001 ... 0.02] was suffocating the model (forcing predictions to 0).
-                    # We add looser values (0.1, 0.5, 1.0) to let the data speak.
-                    lambda_grid= [0.001, 0.01, 0.05, 0.1, 0.5, 1.0]  
-                    
+                    #best lambda=a1=a2 (match natural niw properties)
+                    lambda_grid= [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]  
                     #aggressive lag decay
                     decay_grid= [2.0, 4.0, 6.0]  
                     theta_grid= [0.001, 0.003, 0.01, 0.03, 0.1] 
@@ -317,6 +314,11 @@ class BVAR:
                 P_diag= np.zeros(K)
                 #intercept precision
                 P_diag[0]= 1.0 /a3 
+                
+                # --- CHANGE 1: Define Prior Mean Vector (Shrink to RW) ---
+                # Initialize prior mean to 0
+                Phi_prior_i = np.zeros(K) 
+                
                 for feat_j, f_type in enumerate(self.feature_type_map):
                     #offset for intercept
                     col_idx= feat_j +1 
@@ -324,6 +326,13 @@ class BVAR:
                     orig_k= int(self.kept_indices[feat_j])
                     lag_num= self.lag_indices[orig_k //block_size]
                     var_idx= self.feature_var_indices[feat_j]
+                    
+                    # --- CHANGE 2: Set Own First Lag to 1.0 ---
+                    # If this feature is the same variable as the target (var_idx == i)
+                    # AND it is the first lag (lag_num == 1)
+                    if f_type == 0 and var_idx == i and lag_num == 1:
+                        Phi_prior_i[col_idx] = 1.0
+
                     #sigma of predictor
                     sigma_j= sigmas_all[feat_j] 
                     #sigma of dependent variable
@@ -351,10 +360,14 @@ class BVAR:
                 #posterior precision
                 Post_Precision_i= XX + np.diag(P_diag) + np.eye(K) * 1e-6
 
-                # FIX 2: REVERT TO STANDARD SOLVER (Shrink to 0)
-                # We removed the Phi_prior logic. Stationary data should shrink to 0.
+                # --- CHANGE 3: Apply Prior Mean to Solver ---
+                # Calculate the Right Hand Side: X'Y + P*Beta_prior
+                # This pulls the coefficients towards Phi_prior_i instead of 0
+                RHS = (X.T @ Y[:, i]) + (P_diag * Phi_prior_i)
+
+                #solve for beta using cholesky for speed/stability
                 L_i= np.linalg.cholesky(Post_Precision_i)
-                w= np.linalg.solve(L_i, X.T @ Y[:, i])
+                w= np.linalg.solve(L_i, RHS) # Use the new RHS
                 phi_i= np.linalg.solve(L_i.T, w)
                 
                 #store coefficients
@@ -364,29 +377,27 @@ class BVAR:
                 Unscaled_Cov= L_inv.T @L_inv
                 V_post_list.append(Unscaled_Cov)
             
-            # FIX 3: KEEP THE RESIDUAL SIGMA CALCULATION
-            # This is what fixed your S-shaped PIT. Do not remove this.
-            
             # Calculate fitted values
             Y_hat = X @ Phi_post_all
             # Calculate actual residuals (in-sample error)
             Residuals = Y - Y_hat
             
             # Calculate standard deviation of realized residuals
+            # This captures the actual h-step model uncertainty
             sigmas_posterior = np.std(Residuals, axis=0)
             
             # Ensure no zeros (sanity check)
             sigmas_posterior = np.maximum(sigmas_posterior, 1e-6)
 
-            #sampling             
+            # --- 4. SAMPLING USING POSTERIOR SIGMAS ---
             # Use the FITTED sigmas for the forecast noise
             Sigma_fixed= np.diag(sigmas_posterior**2)             
             self.sigma_draws= np.repeat(Sigma_fixed[None, :, :], n_draws, axis=0) 
 
-            #vectorized sampling of phi draws
             self.phi_draws= np.empty((n_draws, K, N))
             for i in range(N):
-                # Scale covariance by the ACTUAL residual variance (posterior), not the proxy
+                # --- CRITICAL: Use sigmas_posterior (residuals) not sigmas (prior proxy) ---
+                # This ensures the sampling width matches the residuals you calculated above
                 cov_i=(sigmas_posterior[i]**2) *V_post_list[i]
                 
                 #numerical jitter to ensure pd

@@ -59,7 +59,7 @@ print(nans_per_column)
 df_stationary['headline_1m']=np.log(df['Headline_CPI']).diff(1)*100
 df_stationary['core_1m']=np.log(df['Core_CPI']).diff(1)*100
 #add 1- and 2-month lags, two lags only because of PACF plots in 02_eda_raw.py: go down rapidly after lag 2
-for i in [1,2,12]:
+for i in [1,2]:
     df_stationary[f'headline_lag_{i}']=df_stationary['headline_1m'].shift(i)
     df_stationary[f'core_lag_{i}']= df_stationary['core_1m'].shift(i)
 #keep NA's for the lagged variables as they are needed for prediction later
@@ -69,7 +69,7 @@ for i in [1,2,12]:
 #---------------
 #time index
 #---------------------
-df_stationary['time_index_length'] = range(len(df_stationary))
+#df_stationary['time_index_length'] = range(len(df_stationary))
 #--------------------------
 #add Cycle features: sine/consine transformations
 #--------------------------------
@@ -99,7 +99,7 @@ print(df_stationary.tail())
 #-----------------------------
 df_bvar=df_stationary.copy()
 #drop lagged variables and cycle features
-lagged_cols=[col for col in df_bvar.columns if 'lag_' in col]  #leave autoregressive features so bvar can make lags based on them
+lagged_cols=[col for col in df_bvar.columns if 'lag_' in col or 'time' in col]  #leave autoregressive features so bvar can make lags based on them
 df_bvar.drop(columns=lagged_cols, inplace=True)
 
 #for bvar will leave NA for now and start training later as 12. lag will be created by the model itself-> set start date to latest
