@@ -1,0 +1,21 @@
+=== STATISTICAL TEST SUMMARY ===
+
+1. PIT Independence Test (Target: p > 0.05)
+   Models that PASSED (residuals are i.i.d):
+   None.
+
+2. Coverage Test (Target: p_LRcc > 0.05)
+   Models with correct conditional coverage:
+   - QRF_Default (Core 3m): p=0.110 (Actual=0.18)
+   - QRF_Default_PCA (Core 3m): p=0.332 (Actual=0.16)
+   - bvar_independent_niw_hierarchical (Core 3m): p=0.670 (Actual=0.14)
+   - bvar_minnesota (Core 3m): p=0.850 (Actual=0.12)
+   - bvar_natural_niw_hierarchical (Core 3m): p=0.670 (Actual=0.14)
+   - QRF_Default (Headline 3m): p=0.332 (Actual=0.16)
+   - bvar_independent_niw_hierarchical (Headline 3m): p=0.303 (Actual=0.12)
+   - bvar_minnesota (Headline 3m): p=0.785 (Actual=0.10)
+   - bvar_natural_niw_hierarchical (Headline 3m): p=0.850 (Actual=0.12)
+   - QRF_Default (Headline 6m): p=0.111 (Actual=0.16)
+   - QRF_Default_PCA (Headline 6m): p=0.166 (Actual=0.10)
+   - bvar_independent_niw_hierarchical (Headline 6m): p=0.052 (Actual=0.08)
+   - bvar_natural_niw_hierarchical (Headline 6m): p=0.052 (Actual=0.08)

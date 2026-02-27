@@ -21,7 +21,7 @@ rolling_window= 36
 #column name for continuous ranked probability score
 crps_col= "Parametric_CRPS"
 #list of models to include in comparative summary
-models_compare= ["bvar_independent_niw_hierarchical", "QRF_Default_PCA", "bvar_minnesota"]
+models_compare= ["bvar_natural_niw_hierarchical", "QRF_Default_PCA", "bvar_minnesota"]
 #initialize empty list for subfolder paths
 results_subfolder: List[str]= []
 #max number of features to show in shapley plots

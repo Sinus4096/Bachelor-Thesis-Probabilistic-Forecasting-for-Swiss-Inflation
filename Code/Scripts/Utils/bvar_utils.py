@@ -265,10 +265,25 @@ class BVAR:
                     best_lam, best_theta, best_decay= self._mn_tuned_cache[cache_key]
                 else:
                     #best lambda=a1=a2 (match natural niw properties)
-                    lambda_grid= [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.02]  
-                    #aggressive lag decay
-                    decay_grid= [2.0, 4.0, 6.0]  
-                    theta_grid= [0.001, 0.003, 0.01, 0.03, 0.1] 
+                    if horizon <= 3:
+                        lambda_grid = [0.01, 0.02, 0.05, 0.07, 0.1]
+                        decay_grid  = [1.0, 1.25, 1.5]
+                        theta_grid  = [0.01, 0.03, 0.05, 0.1]
+
+                    elif horizon <= 6:
+                        lambda_grid = [0.02, 0.05, 0.07, 0.1, 0.15, 0.2]
+                        decay_grid  = [1.0, 1.25, 1.5, 2.0]
+                        theta_grid  = [0.03, 0.05, 0.1, 0.2, 0.3]
+
+                    elif horizon <= 9:
+                        lambda_grid = [0.05, 0.07, 0.1, 0.15, 0.2, 0.3]
+                        decay_grid  = [1.25, 1.5, 2.0]
+                        theta_grid  = [0.05, 0.1, 0.2, 0.3, 0.5]
+
+                    else:  # horizon >= 12
+                        lambda_grid = [0.07, 0.1, 0.15, 0.2, 0.3, 0.4]
+                        decay_grid  = [1.25, 1.5, 2.0]
+                        theta_grid  = [0.1, 0.2, 0.3, 0.5, 0.7] 
 
                     #cheaper tuning settings for performance
                     start_eval= max(horizon + 24, int(0.75 * len(data)))
@@ -438,15 +453,28 @@ class BVAR:
                     K= self.n_features
                     exog= self.n_exog
                     #set grids based on forecast horizon
-                    if horizon==12:
-                        #wider grid for long term
-                        lambda_grid= [0.05, 0.07, 0.09, 0.1, 0.2, 0.3]
-                        theta_grid= [0.05, 0.1, 0.3, 0.5]
-                        decay_grid= [1.0, 1.5, 2.0]                    
-                    #standard grid for short term
-                    else:
-                        lambda_grid= [0.01, 0.03, 0.05, 0.07, 0.1]
-                        theta_grid= [0.01, 0.03, 0.05, 0.1]
+                    if horizon <= 3:
+                        # very short horizon → allow flexibility but avoid ultra-weak shrinkage
+                        lambda_grid = [0.03, 0.05, 0.07, 0.1]
+                        theta_grid  = [0.03, 0.05, 0.1]
+                        decay_grid  = [1.0, 1.25, 1.5]
+
+                    elif horizon <= 6:
+
+                        lambda_grid = [0.05, 0.07, 0.1, 0.15, 0.2]  # drop 0.01/0.03 entirely
+                        theta_grid  = [0.05, 0.1, 0.2, 0.3]
+                        decay_grid  = [ 1.25]
+
+                    elif horizon <= 9:
+                        # multi-step → stronger shrinkage + stronger variance prior
+                        lambda_grid = [0.07, 0.1, 0.15, 0.2, 0.3]
+                        theta_grid  = [0.1, 0.2, 0.3, 0.5]
+                        decay_grid  = [1.0, 1.25, 1.5]
+
+                    else:  # horizon >= 12
+                        # long horizon → stability dominates
+                        lambda_grid= [0.05, 0.07, 0.09, 0.1, 0.2, 0.3] 
+                        theta_grid= [0.05, 0.1, 0.3, 0.5] 
                         decay_grid= [1.0, 1.5, 2.0]
                     #set start for evaluation window
                     start_eval= max(horizon + 24, int(0.6*len(data)))
@@ -616,6 +644,8 @@ class BVAR:
         elif 'natural_niw' in self.prior_type:
             #hyperparams
             a3= float(self.params.get('alpha', 100.0))
+            #use instance-level cache for tuning (like minnesota)
+            cache_key = ("natural_niw", horizon, int(self.n_features), int(self.n_vars))
             #choose/tune lambda/theta/decay 
             if fixed_lambda is not None:
                 #use provided lambda
@@ -623,10 +653,63 @@ class BVAR:
                 best_theta= float(self.params.get('theta', 0.01))
                 best_decay= float(self.params.get('alpha_decay', 2.0))
             else:
-                #fall back to defaults if no tuning provided
-                best_lam= float(self.params.get('lambda', 0.02))
-                best_theta= float(self.params.get('theta', 0.01))
-                best_decay= float(self.params.get('alpha_decay', 2.0))
+                # reuse cached tuning if available
+                if hasattr(self, "_niw_tuned_cache") and cache_key in self._niw_tuned_cache:
+                    best_lam, best_theta, best_decay = self._niw_tuned_cache[cache_key]
+                else:
+                    # init cache if missing
+                    if not hasattr(self, "_niw_tuned_cache"):
+                        self._niw_tuned_cache = {}
+
+                    # horizon-aware grids (same philosophy as your improved minnesota ones)
+                    if horizon <= 3:
+                        lambda_grid = [0.01, 0.02, 0.03]
+                        theta_grid  = [0.01, 0.03, 0.05]
+                        decay_grid  = [1.5, 2.0]
+                    else:
+                        lambda_grid = [0.02, 0.03]
+                        theta_grid  = [0.01, 0.03]
+                        decay_grid  = [2.0, 2.5]
+
+
+                    # tuning settings (same as minnesota)
+                    start_eval   = max(horizon + 24, int(0.75 * len(data)))
+                    step_tune    = 4
+                    n_draws_tune = 150
+                    burn_in_tune = 50
+
+                    # target variable for CRPS evaluation
+                    target_cols = [c for c in data.columns if "target_" in c]
+                    target_col  = target_cols[0]
+
+                    best_score = np.inf
+                    best_params_tuple = (lambda_grid[0], theta_grid[0], decay_grid[0])
+
+                    for lam in lambda_grid:
+                        for theta in theta_grid:
+                            for dec in decay_grid:
+                                p_params = {"theta": float(theta), "alpha_decay": float(dec), "alpha": float(a3)}
+
+                                score = rolling_crps_score(
+                                    data=data,
+                                    target_col=target_col,
+                                    target_idx=0,
+                                    horizon=horizon,
+                                    prior_type="natural_niw",
+                                    prior_params=p_params,
+                                    fixed_lambda=float(lam),     # IMPORTANT to avoid recursion
+                                    start_eval=start_eval,
+                                    step=step_tune,
+                                    n_draws=n_draws_tune,
+                                    burn_in=burn_in_tune
+                                )
+
+                                if score < best_score:
+                                    best_score = score
+                                    best_params_tuple = (float(lam), float(theta), float(dec))
+
+                    best_lam, best_theta, best_decay = best_params_tuple
+                    self._niw_tuned_cache[cache_key] = (best_lam, best_theta, best_decay)
 
             #persist chosen params so forecast/eval sees them
             self.params['lambda']= best_lam
