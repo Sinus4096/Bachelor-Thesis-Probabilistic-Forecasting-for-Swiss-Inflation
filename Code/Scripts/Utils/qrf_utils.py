@@ -4,11 +4,12 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from pathlib import Path
-from sklearn.linear_model import ElasticNetCV, RidgeCV
+
 from sklearn.base import clone
-from sklearn.model_selection import TimeSeriesSplit
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import ElasticNetCV
+from sklearn.model_selection import TimeSeriesSplit, cross_val_predict
 
 #PCA
 #-----------------------
@@ -132,15 +133,8 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     bundle = {"r": r, "pca_cols": pca_cols, "keep_cols": keep_cols, "scaler": scaler, "pca": pca,}
     return X_train_final, X_test_final, bundle
 
-#linear features
+#hybrid model with elastic net mean
 #----------------------------------
-import numpy as np
-import pandas as pd
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import ElasticNetCV
-from sklearn.model_selection import TimeSeriesSplit, cross_val_predict
 
 def _feasible_tscv(n: int, gap: int, max_splits: int = 5):
     # conservative test_size
