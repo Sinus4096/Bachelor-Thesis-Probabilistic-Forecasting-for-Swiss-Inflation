@@ -14,15 +14,15 @@ import seaborn as sns
 # =========================
 # CONFIG
 # =========================
-data_type = "Core"  # "Headline" or "Core"
+data_type = "Headline"  # "Headline" or "Core"
 horizons = [3, 6, 9, 12]
 rolling_window = 36
 
 # models to compare in plots
 models_compare = [
+    "Benchmark_ARGARCH",
+    "QRF_Default_PCA",
     "bvar_independent_niw_hierarchical",
-    "bvar_minnesota",
-    "bvar_natural_niw_hierarchical",
 ]
 
 # metrics / columns in your result CSVs

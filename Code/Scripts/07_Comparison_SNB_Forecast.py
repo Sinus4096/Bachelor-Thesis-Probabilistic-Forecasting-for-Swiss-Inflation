@@ -1,519 +1,408 @@
-import requests
 import pandas as pd
-from pyjstat import pyjstat
 import numpy as np
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import warnings
-import os
 import re
-warnings.filterwarnings('ignore')
+import warnings
+import matplotlib.dates as mdates
+warnings.filterwarnings("ignore")
+
+import matplotlib.pyplot as plt
+
+# ============================================================
+# CONFIG
+# ============================================================
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# --- paths (adapt to your repo structure) ---
+RAW_DIR = SCRIPT_DIR.parent.parent / "Code" / "Data" / "Raw_Data"
+RES_DIR = SCRIPT_DIR.parent.parent / "Code" / "Results" / "Data_experiments_qrf"  # adapt
+
+SNB_CSV = RAW_DIR / "SNB_comparison.csv"
+
+# Your best model files (edit names as needed)
+# If later you want to run for all models, add another dict and loop.
+MODEL_NAME = "QRF_Default_PCA_Headline"
+MODEL_FILES = {
+    3: RES_DIR / "QRF_Default_PCA_Headline_3m.csv",
+    6: RES_DIR / "QRF_Default_PCA_Headline_6m.csv",
+    9: RES_DIR / "QRF_Default_PCA_Headline_9m.csv",
+    12: RES_DIR / "QRF_Default_PCA_Headline_12m.csv",
+}
+
+USE_TIMESAFE = True  # recommended for honesty about information set
+PLOT_DIR = SCRIPT_DIR / "Plots_and_Tables"/"07_Comparison_SNB_Forecast"
+PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Which intervals to check
+COVERAGES = [0.68, 0.90]  # align to your q16/q84 and q05/q95
+TAIL_THRESHOLDS = [0.0, 2.0]  # deflation and above-target thresholds
 
 
-# ----------------------------
-# Paths
-# ----------------------------
-script_dir = Path(__file__).resolve().parent
-file_path = script_dir.parent.parent / "Code" / "Data" / "Raw_Data"
-csv_path = file_path / "SNB_comparison.csv"
+# ============================================================
+# 1) LOAD + PARSE SNB CUBE EXPORT (robust skip of metadata)
+# ============================================================
+def load_snb_cube(csv_path: Path) -> pd.DataFrame:
+    with open(csv_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-# ----------------------------
-# Robust load: skip SNB cube metadata until the real header row
-# ----------------------------
-with open(csv_path, "r", encoding="utf-8") as f:
-    lines = f.readlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith('"Date";"D0";"D1";"Value"'):
+            start = i
+            break
+    if start is None:
+        raise ValueError('Header row not found: "Date";"D0";"D1";"Value"')
 
-start = None
-for i, line in enumerate(lines):
-    if line.strip().startswith('"Date";"D0";"D1";"Value"'):
-        start = i
-        break
+    df = pd.read_csv(csv_path, sep=";", quotechar='"', skiprows=start, dtype=str)
+    df = df.rename(columns={"Date": "target_q", "D0": "series", "D1": "kind", "Value": "value"})
 
-if start is None:
-    raise ValueError('Could not find the SNB data header row: "Date";"D0";"D1";"Value"')
+    # Clean
+    for c in ["target_q", "series", "kind"]:
+        df[c] = df[c].astype(str).str.strip()
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
 
-df = pd.read_csv(
-    csv_path,
-    sep=";",
-    quotechar='"',
-    skiprows=start,      # start reading at the actual header row
-    dtype=str
-)
+    # keep only valid rows
+    df = df[df["target_q"].str.match(r"^\d{4}-Q[1-4]$", na=False)].copy()
+    df = df[df["series"].str.match(r"^[MJSD]\d{4}", na=False)].copy()
+    df = df[df["kind"].isin(["P", "BI"])].copy()  # P=forecast, BI=observed (in cube)
+    return df
 
-# Rename to consistent column names
-df = df.rename(columns={"Date": "target_q", "D0": "series", "D1": "kind", "Value": "value"})
 
-# Basic cleaning
-df["target_q"] = df["target_q"].astype(str).str.strip()
-df["series"]   = df["series"].astype(str).str.strip()
-df["kind"]     = df["kind"].astype(str).str.strip()
-df["value"]    = pd.to_numeric(df["value"], errors="coerce")
+def snb_build_path(df: pd.DataFrame) -> pd.DataFrame:
+    # series: e.g. M2012PL000P -> publication month letter + year + scenario
+    month_map = {"M": 3, "J": 6, "S": 9, "D": 12}
+    m = df["series"].str.extract(r"^(?P<mon>[MJSD])(?P<year>\d{4})(?P<scenario>.*)$")
+    df = df.join(m)
 
-# Drop any empty rows just in case
-df = df.dropna(subset=["target_q", "series", "kind"], how="any").copy()
+    df["vintage_month"] = df["mon"].map(month_map)
+    df["vintage_year"] = pd.to_numeric(df["year"], errors="coerce")
 
-# Keep only proper quarter labels and proper series labels (extra safety)
-df = df[df["target_q"].str.match(r"^\d{4}-Q[1-4]$", na=False)].copy()
-df = df[df["series"].str.match(r"^[MJSD]\d{4}", na=False)].copy()
+    df["vintage_q"] = pd.PeriodIndex(
+        pd.to_datetime(dict(year=df["vintage_year"], month=df["vintage_month"], day=1)),
+        freq="Q"
+    )
+    df["target_qp"] = pd.PeriodIndex(df["target_q"], freq="Q")
 
-# ----------------------------
-# Parse vintage and scenario from series code
-# ----------------------------
-month_map = {"M": 3, "J": 6, "S": 9, "D": 12}
-m = df["series"].str.extract(r"^(?P<mon>[MJSD])(?P<year>\d{4})(?P<scenario>.*)$")
-df = df.join(m)
+    df["what"] = df["kind"].map({"P": "forecast", "BI": "observed"})
+    df = df[df["what"].notna()].copy()
 
-df["vintage_month"] = df["mon"].map(month_map)
-df["vintage_year"]  = pd.to_numeric(df["year"], errors="coerce")
-
-# Vintage quarter (publication quarter)
-df["vintage_q"] = pd.PeriodIndex(
-    pd.to_datetime(dict(year=df["vintage_year"], month=df["vintage_month"], day=1)),
-    freq="Q"
-)
-
-# Target quarter
-df["target_qp"] = pd.PeriodIndex(df["target_q"], freq="Q")
-
-# Forecast vs observed (as encoded by SNB cube)
-df["what"] = df["kind"].map({"P": "forecast", "BI": "observed"})
-df = df[df["what"].notna()].copy()
-
-# ----------------------------
-# Build panel: (vintage_q, target_qp, scenario) -> forecast / observed
-# ----------------------------
-panel = (
-    df.pivot_table(
+    panel = (df.pivot_table(
         index=["vintage_q", "target_qp", "scenario"],
         columns="what",
         values="value",
         aggfunc="first"
+    ).reset_index())
+
+    # pick "active" scenario per vintage: choose scenario with most non-missing forecasts
+    # ----------------------------
+    # Choose one scenario per vintage WITHOUT restricting to "PL"
+    # ----------------------------
+
+    # Count non-missing forecast entries per vintage & scenario
+    counts = (
+        panel
+        .groupby(["vintage_q", "scenario"])["forecast"]
+        .apply(lambda s: s.notna().sum())
+        .reset_index(name="n_forecasts")
     )
-    .reset_index()
-)
 
-# ----------------------------
-# Choose the "active" scenario per vintage
-# (recommended: restrict to PL* scenarios that clearly encode a policy-rate assumption)
-# ----------------------------
-panel_pl = panel[panel["scenario"].astype(str).str.startswith("PL")].copy()
+    # Choose scenario with max forecasts per vintage (tie-break: keep first)
+    chosen = counts.loc[counts.groupby("vintage_q")["n_forecasts"].idxmax()].copy()
 
-# Count non-missing forecast entries per vintage & scenario
-counts = (
-    panel_pl
-    .groupby(["vintage_q", "scenario"])["forecast"]
-    .apply(lambda s: s.notna().sum())
-    .reset_index(name="n_forecasts")
-)
+    # Keep only chosen scenario
+    panel_snb = panel.merge(
+        chosen[["vintage_q", "scenario"]],
+        on=["vintage_q", "scenario"],
+        how="inner"
+    )
 
-# Choose scenario with max forecasts per vintage
-chosen = counts.loc[counts.groupby("vintage_q")["n_forecasts"].idxmax()].copy()
+    # horizons
+    panel_snb["h_q"] = panel_snb["target_qp"].astype("int64") - panel_snb["vintage_q"].astype("int64")
+    panel_snb["h_months"] = panel_snb["h_q"] * 3
 
-# Keep only chosen scenario
-panel_snb = panel_pl.merge(
-    chosen[["vintage_q", "scenario"]],
-    on=["vintage_q", "scenario"],
-    how="inner"
-)
+    snb_36912 = panel_snb[panel_snb["h_q"].isin([1,2,3,4])].copy()
+    snb_36912 = snb_36912.sort_values(["vintage_q","h_q","target_qp"]).reset_index(drop=True)
 
-# Sanity check: one scenario per vintage
-if not (panel_snb.groupby("vintage_q")["scenario"].nunique() <= 1).all():
-    raise RuntimeError("More than one scenario per vintage remained after selection. Inspect 'panel_snb'.")
+    snb_path = snb_36912[["vintage_q","h_months","target_qp","scenario","forecast","observed"]].copy()
+    return snb_path
 
-# ----------------------------
-# Compute horizons and extract 3/6/9/12 months (1/2/3/4 quarters ahead)
-# ----------------------------
-panel_snb["h_q"] = panel_snb["target_qp"].astype("int64") - panel_snb["vintage_q"].astype("int64")
-panel_snb["h_months"] = panel_snb["h_q"] * 3
-
-snb_36912 = panel_snb[panel_snb["h_q"].isin([1, 2, 3, 4])].copy()
-snb_36912 = snb_36912.sort_values(["vintage_q", "h_q", "target_qp"]).reset_index(drop=True)
-
-# Final benchmark table: what you'll merge on later (vintage_q, h_months)
-snb_path = snb_36912[["vintage_q", "h_months", "target_qp", "scenario", "forecast", "observed"]].copy()
-# ------------------------------------------------------------
-# Build realized quarterly inflation series from BI (observed)
-# Take the latest available observed value for each target quarter
-# ------------------------------------------------------------
-obs_raw = panel.copy()
-
-# Keep rows where observed exists
-obs_raw = obs_raw[obs_raw["observed"].notna()].copy()
-
-# Sort by vintage, then for each target quarter take the last observed value available
-obs_raw = obs_raw.sort_values(["target_qp", "vintage_q"])
-
-realized_q = (obs_raw
-              .groupby("target_qp", as_index=False)
-              .tail(1)[["target_qp", "observed"]]
-              .rename(columns={"observed": "realized"}))
-
-# Merge realized values into your snb_path (which is future-horizon forecasts)
-snb_path = snb_path.merge(realized_q, on="target_qp", how="left")
-
-print("\nCheck realized merge:")
-print(snb_path[["vintage_q", "h_months", "target_qp", "forecast", "realized"]].head(20))
-
-print("\nHow many realized values missing?")
-print(snb_path["realized"].isna().mean())
-
-# ----------------------------
-# Output sanity prints
-# ----------------------------
-print("Loaded rows (clean):", len(df))
-print("Panel rows:", len(panel))
-print("SNB benchmark rows (h=3,6,9,12):", len(snb_path))
-print("\nUnique scenarios retained (should be small):")
-print(snb_path["scenario"].value_counts().head(10))
-
-print("\nPreview snb_path:")
-print(snb_path.head(20))
-
-
-
-
-import numpy as np
-import pandas as pd
-from scipy.stats import norm
 
 # ============================================================
-# Helpers
+# 2) LOAD YOUR MODEL OUTPUTS (timesafe YoY quantiles)
 # ============================================================
+def load_model_files(model_files: dict, use_timesafe: bool=True) -> pd.DataFrame:
+    out = []
+    for h, fp in model_files.items():
+        d = pd.read_csv(fp)
 
-def rmse(y, yhat):
-    m = np.isfinite(y) & np.isfinite(yhat)
-    return np.sqrt(np.mean((y[m] - yhat[m])**2)) if m.any() else np.nan
+        # Parse dates
+        d["Date"] = pd.to_datetime(d["Date"])
+        d["Target_date"] = pd.to_datetime(d["Target_date"])
 
-def mae(y, yhat):
-    m = np.isfinite(y) & np.isfinite(yhat)
-    return np.mean(np.abs(y[m] - yhat[m])) if m.any() else np.nan
+        d["h_months"] = h
+        d["vintage_q"] = d["Date"].dt.to_period("Q")
 
-def interval_score(y, l, u, coverage):
-    """
-    Gneiting & Raftery interval score.
-    coverage = 0.90 -> alpha = 0.10
-    score = (u-l) + (2/alpha)*(l-y) if y<l + (2/alpha)*(y-u) if y>u
-    """
-    alpha = 1.0 - coverage
-    y = np.asarray(y)
-    l = np.asarray(l)
-    u = np.asarray(u)
+        # Choose quantiles
+        if use_timesafe:
+            q05 = "q05_YoY_timesafe"
+            q16 = "q16_YoY_timesafe"
+            q84 = "q84_YoY_timesafe"
+            q95 = "q95_YoY_timesafe"
+        else:
+            q05 = "q05_YoY"
+            q16 = "q16_YoY"
+            q84 = "q84_YoY"
+            q95 = "q95_YoY"
 
-    score = (u - l).copy()
-    below = y < l
-    above = y > u
-    score[below] += (2.0 / alpha) * (l[below] - y[below])
-    score[above] += (2.0 / alpha) * (y[above] - u[above])
-    return score
+        # Some files may not have all columns; fail loudly
+        needed = ["Forecast_median_YoY", q05, q16, q84, q95, "Actual_YoY"]
+        missing = [c for c in needed if c not in d.columns]
+        if missing:
+            raise ValueError(f"Missing columns in {fp.name}: {missing}")
 
-def coverage_rate(y, l, u):
-    m = np.isfinite(y) & np.isfinite(l) & np.isfinite(u)
-    if not m.any():
-        return np.nan
-    return np.mean((y[m] >= l[m]) & (y[m] <= u[m]))
+        d["median"] = d["Forecast_median_YoY"]
+        d["q05"] = d[q05]
+        d["q16"] = d[q16]
+        d["q84"] = d[q84]
+        d["q95"] = d[q95]
+        d["realized_yoy"] = d["Actual_YoY"]
 
-def mean_width(l, u):
+        out.append(d[["Date","Target_date","vintage_q","h_months","realized_yoy","median","q05","q16","q84","q95"]].copy())
+
+    model_fc = pd.concat(out, ignore_index=True)
+    model_fc = model_fc.sort_values(["vintage_q","h_months"]).reset_index(drop=True)
+    return model_fc
+
+#plotting
+#------------
+def plot_trajectory_grid(df, outpath: Path, title_suffix=""):
+    # Create a 2x2 figure
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharex=False, sharey=True)
+    horizons = [3, 6, 9, 12]
+    axes = axes.flatten()
+
+    for i, h in enumerate(horizons):
+        ax = axes[i]
+        g = df[df["h_months"] == h].sort_values("vintage_q").copy()
+        
+        if g.empty:
+            ax.set_title(f"No Data for h={h}m")
+            continue
+            
+        x = g["vintage_q"].dt.to_timestamp(how="end")
+        
+        # Plot SNB and Model Trajectories
+        ax.plot(x, g["forecast"], color='tab:red', linewidth=2, label="SNB Point Forecast")
+        ax.plot(x, g["median"], color='tab:blue', linewidth=1.5, linestyle='--', label=f"{MODEL_NAME} Median")
+
+        # Plot Probability Bands (68% and 90%)
+        ax.fill_between(x, g["q16"], g["q84"], color='tab:blue', alpha=0.3, label="68% Interval")
+        ax.fill_between(x, g["q05"], g["q95"], color='tab:blue', alpha=0.1, label="90% Interval")
+
+        # Visual anchors for SNB Price Stability Target (0-2%)
+        ax.axhline(2.0, color='black', linewidth=1, linestyle=':', alpha=0.6)
+        ax.axhline(0.0, color='black', linewidth=1, linestyle=':', alpha=0.6)
+
+        # Formatting each subplot
+        ax.set_title(f"Forecast Horizon: {h} Months", fontsize=14, fontweight='bold')
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+
+        # Minor ticks every year (optional)
+        ax.xaxis.set_minor_locator(mdates.YearLocator(1))
+        if i >= 2: ax.set_xlabel("Vintage Quarter")
+        if i % 2 == 0: ax.set_ylabel("Inflation (YoY %)")
+        ax.grid(True, which='both', linestyle='--', alpha=0.5)
+
+    # Single legend for the whole figure
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=4, fontsize=12)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Adjust to make room for suptitle/legend
+    plt.savefig(outpath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+# ============================================================
+# 3) ROUTE A METRICS (descriptive, model-based)
+# ============================================================
+def inside_interval(x, l, u):
+    m = np.isfinite(x) & np.isfinite(l) & np.isfinite(u)
+    return np.where(m, (x >= l) & (x <= u), np.nan)
+
+def width(l, u):
     m = np.isfinite(l) & np.isfinite(u)
-    return np.mean(u[m] - l[m]) if m.any() else np.nan
+    w = np.where(m, u - l, np.nan)
+    return w
 
-def prob_below_from_quantiles(x, q_levels, q_values):
+def approx_cdf_piecewise(x, qs, ps):
     """
-    Approximate P(Y <= x) given a monotone quantile function.
-    q_levels: array of probabilities (e.g., [0.01,...,0.99])
-    q_values: array of corresponding quantile values for one forecast
-    Uses linear interpolation on the inverse CDF.
+    Monotone piecewise-linear approximation of CDF using quantile points.
+    qs: array of quantile values (must be sortable)
+    ps: array of probabilities corresponding to qs
     """
-    q_levels = np.asarray(q_levels, dtype=float)
-    q_values = np.asarray(q_values, dtype=float)
-
-    m = np.isfinite(q_levels) & np.isfinite(q_values)
-    q_levels = q_levels[m]
-    q_values = q_values[m]
-    if len(q_levels) < 2:
+    qs = np.asarray(qs, dtype=float)
+    ps = np.asarray(ps, dtype=float)
+    ok = np.isfinite(qs) & np.isfinite(ps)
+    if ok.sum() < 2:
         return np.nan
+    qs, ps = qs[ok], ps[ok]
+    order = np.argsort(qs)
+    qs, ps = qs[order], ps[order]
 
-    # ensure sorted by quantile value (should already be monotone, but enforce)
-    order = np.argsort(q_values)
-    q_values = q_values[order]
-    q_levels = q_levels[order]
+    if x <= qs[0]:
+        return float(ps[0])
+    if x >= qs[-1]:
+        return float(ps[-1])
+    return float(np.interp(x, qs, ps))
 
-    if x <= q_values[0]:
-        return float(q_levels[0])
-    if x >= q_values[-1]:
-        return float(q_levels[-1])
 
-    return float(np.interp(x, q_values, q_levels))
-
-def add_snb_gaussian_intervals(df, coverage_levels=(0.5, 0.7, 0.9), min_obs=20, expanding=True):
+def build_routeA_table(merged: pd.DataFrame) -> pd.DataFrame:
     """
-    Build SNB 'Gaussian' intervals around SNB point forecast using historical SNB errors by horizon.
-    - expanding=True: expanding window std
-    - else: rolling window (set rolling size below if you extend)
-    Returns df with columns like snb_l90, snb_u90, ...
+    merged contains: SNB point forecast + your model median/quantiles.
+    We DO NOT compute CRPS/RMSE vs SNB. We do:
+      - how often SNB point lies inside your intervals (50/68/90)
+      - distributional "risk" measures from your model (prob below 0, prob above 2)
+      - descriptive deviations between SNB point and model median
     """
-    out = df.copy()
-    out = out.sort_values(["h_months", "vintage_q"]).reset_index(drop=True)
+    df = merged.copy()
 
-    # SNB forecast error
-    out["snb_err"] = out["forecast"] - out["realized"]
+    # --- deviations (trajectory comparison) ---
+    df["diff_median_minus_snb"] = df["median"] - df["forecast"]
+    df["absdiff_median_minus_snb"] = np.abs(df["diff_median_minus_snb"])
 
-    # estimate sigma per horizon over time
-    sigmas = []
-    for h, g in out.groupby("h_months", sort=False):
-        g = g.copy().sort_values("vintage_q")
-        errs = g["snb_err"].to_numpy(dtype=float)
+    # --- interval inclusion of SNB point ---
+    df["snb_in_68"] = inside_interval(df["forecast"], df["q16"], df["q84"]).astype("float")
+    df["snb_in_90"] = inside_interval(df["forecast"], df["q05"], df["q95"]).astype("float")
 
-        sigma_t = np.full(len(g), np.nan, dtype=float)
-        for i in range(len(g)):
-            hist = errs[:i]  # only past errors (strictly before current vintage)
-            hist = hist[np.isfinite(hist)]
-            if len(hist) >= min_obs:
-                sigma_t[i] = np.std(hist, ddof=1)
-        g["snb_sigma"] = sigma_t
-        sigmas.append(g)
+    df["width_68"] = width(df["q16"], df["q84"])
+    df["width_90"] = width(df["q05"], df["q95"])
 
-    out = pd.concat(sigmas, axis=0).sort_values(["h_months", "vintage_q"]).reset_index(drop=True)
+    # --- model-implied risk probabilities (from piecewise quantile CDF) ---
+    # Use (q05,q16,median,q84,q95) at probs (0.05,0.16,0.50,0.84,0.95)
+    probs = np.array([0.05, 0.16, 0.50, 0.84, 0.95], dtype=float)
 
-    # build intervals
-    for cov in coverage_levels:
-        alpha = 1.0 - cov
-        z = norm.ppf(1.0 - alpha/2.0)
-        out[f"snb_l{int(cov*100)}"] = out["forecast"] - z*out["snb_sigma"]
-        out[f"snb_u{int(cov*100)}"] = out["forecast"] + z*out["snb_sigma"]
+    def p_below(row, thr):
+        qs = np.array([row["q05"], row["q16"], row["median"], row["q84"], row["q95"]], dtype=float)
+        return approx_cdf_piecewise(thr, qs, probs)
 
-    return out
+    for thr in TAIL_THRESHOLDS:
+        df[f"p_below_{thr:g}"] = df.apply(lambda r: p_below(r, thr), axis=1)
 
-# ============================================================
-# MAIN: compute metrics
-# ============================================================
+    # Convert above-2
+    df["p_above_2"] = 1.0 - df["p_below_2"]
 
-def compute_snb_benchmark_metrics(
-    snb_path: pd.DataFrame,
-    model_fc: pd.DataFrame,
-    quantile_cols: dict,
-    dense_q_levels: list | None = None,
-    dense_q_prefix: str = "q",
-    coverage_levels=(0.5, 0.7, 0.9),
-    tail_thresholds=(0.0, 2.0),
-):
-    """
-    snb_path: must have ['vintage_q','h_months','forecast','realized']
-    model_fc: must have ['vintage_q','h_months'] plus quantiles specified in quantile_cols
-              quantile_cols example for 90% interval:
-              {'q50':'q50', 0.05:'q05', 0.95:'q95', 0.15:'q15', 0.85:'q85', 0.25:'q25', 0.75:'q75'}
-    dense_q_levels: optional list like [0.01,...,0.99] if you have dense quantiles for better tail probs
-    dense_q_prefix: column prefix if dense quantiles named 'q01','q02',... (as strings)
-
-    Returns:
-      merged_df, metrics_table (by horizon and overall)
-    """
-
-    # --- ensure Period dtype for vintage_q if needed
-    def to_period_q(x):
-        if isinstance(x.dtype, pd.PeriodDtype):
-            return x
-        return pd.PeriodIndex(x, freq="Q")
-
-    snb = snb_path.copy()
-    mdl = model_fc.copy()
-
-    snb["vintage_q"] = to_period_q(snb["vintage_q"])
-    mdl["vintage_q"] = to_period_q(mdl["vintage_q"])
-
-    # --- merge
-    df = snb.merge(mdl, on=["vintage_q", "h_months"], how="inner")
-    df = df.dropna(subset=["realized", "forecast"]).copy()
-
-    # --- model point (median)
-    q50_col = quantile_cols.get("q50", "q50")
-    df["model_point"] = df[q50_col]
-
-    # --- point accuracy
-    # (Compute per horizon and overall)
+    # Summarize by horizon + overall
     rows = []
     for h, g in df.groupby("h_months"):
         rows.append({
-            "scope": f"h={h}m",
+            "h_months": h,
             "n": len(g),
-            "RMSE_model": rmse(g["realized"].values, g["model_point"].values),
-            "RMSE_SNB": rmse(g["realized"].values, g["forecast"].values),
-            "MAE_model": mae(g["realized"].values, g["model_point"].values),
-            "MAE_SNB": mae(g["realized"].values, g["forecast"].values),
-        })
-    rows.append({
-        "scope": "overall",
-        "n": len(df),
-        "RMSE_model": rmse(df["realized"].values, df["model_point"].values),
-        "RMSE_SNB": rmse(df["realized"].values, df["forecast"].values),
-        "MAE_model": mae(df["realized"].values, df["model_point"].values),
-        "MAE_SNB": mae(df["realized"].values, df["forecast"].values),
-    })
-
-    # --- interval metrics for your model
-    for cov in coverage_levels:
-        lq = round((1.0 - cov)/2.0, 2)
-        uq = round(1.0 - (1.0 - cov)/2.0, 2)
-
-        lcol = quantile_cols.get(lq, None)
-        ucol = quantile_cols.get(uq, None)
-        if lcol is None or ucol is None:
-            # skip if you don't have those endpoints
-            continue
-
-        df[f"model_l{int(cov*100)}"] = df[lcol]
-        df[f"model_u{int(cov*100)}"] = df[ucol]
-
-        # interval score per row
-        df[f"model_IS{int(cov*100)}"] = interval_score(
-            df["realized"].values,
-            df[f"model_l{int(cov*100)}"].values,
-            df[f"model_u{int(cov*100)}"].values,
-            coverage=cov
-        )
-
-    # --- SNB Gaussian benchmark intervals (constructed)
-    df = add_snb_gaussian_intervals(df, coverage_levels=coverage_levels, min_obs=20)
-
-    for cov in coverage_levels:
-        lcol = f"snb_l{int(cov*100)}"
-        ucol = f"snb_u{int(cov*100)}"
-        if lcol in df.columns and ucol in df.columns:
-            df[f"snb_IS{int(cov*100)}"] = interval_score(
-                df["realized"].values,
-                df[lcol].values,
-                df[ucol].values,
-                coverage=cov
-            )
-
-    # --- tail probabilities from quantiles
-    # Prefer dense quantiles if provided; otherwise approximate from available endpoints.
-    lo_thr, hi_thr = tail_thresholds
-
-    if dense_q_levels is not None:
-        # expect columns like q01,q02,... or similar; adapt if needed
-        dense_cols = []
-        for a in dense_q_levels:
-            # e.g., 0.01 -> "q01"
-            dense_cols.append(f"{dense_q_prefix}{int(round(a*100)):02d}")
-
-        missing = [c for c in dense_cols if c not in df.columns]
-        if missing:
-            raise ValueError(f"Dense quantile columns missing: {missing[:10]} ...")
-
-        q_levels = np.array(dense_q_levels, dtype=float)
-
-        p_below = []
-        p_above = []
-        p_in = []
-        for _, r in df.iterrows():
-            q_vals = r[dense_cols].to_numpy(dtype=float)
-            p_lo = prob_below_from_quantiles(lo_thr, q_levels, q_vals)
-            p_hi = prob_below_from_quantiles(hi_thr, q_levels, q_vals)
-            p_below.append(p_lo)
-            p_above.append(1.0 - p_hi if np.isfinite(p_hi) else np.nan)
-            p_in.append((p_hi - p_lo) if (np.isfinite(p_hi) and np.isfinite(p_lo)) else np.nan)
-
-        df["p_below0"] = p_below
-        df["p_above2"] = p_above
-        df["p_in_0_2"] = p_in
-
-    else:
-        # Use whatever quantiles you have (less accurate, but works)
-        # Build arrays from all numeric quantiles provided in quantile_cols (excluding 'q50' key).
-        q_pairs = [(k, v) for k, v in quantile_cols.items() if isinstance(k, float)]
-        q_pairs = sorted(q_pairs, key=lambda x: x[0])
-        q_levels = np.array([k for k, _ in q_pairs], dtype=float)
-        q_cols = [v for _, v in q_pairs]
-        if len(q_cols) < 3:
-            raise ValueError("Not enough quantiles to approximate tail probs. Provide dense_q_levels or more quantiles.")
-
-        p_below, p_above, p_in = [], [], []
-        for _, r in df.iterrows():
-            q_vals = r[q_cols].to_numpy(dtype=float)
-            p_lo = prob_below_from_quantiles(lo_thr, q_levels, q_vals)
-            p_hi = prob_below_from_quantiles(hi_thr, q_levels, q_vals)
-            p_below.append(p_lo)
-            p_above.append(1.0 - p_hi if np.isfinite(p_hi) else np.nan)
-            p_in.append((p_hi - p_lo) if (np.isfinite(p_hi) and np.isfinite(p_lo)) else np.nan)
-
-        df["p_below0"] = p_below
-        df["p_above2"] = p_above
-        df["p_in_0_2"] = p_in
-
-    # --- build metrics table
-    metrics = []
-
-    def add_interval_metrics(scope, g, prefix, cov):
-        l = g[f"{prefix}_l{int(cov*100)}"].values
-        u = g[f"{prefix}_u{int(cov*100)}"].values
-        y = g["realized"].values
-        return {
-            f"cov{int(cov*100)}_{prefix}": coverage_rate(y, l, u),
-            f"width{int(cov*100)}_{prefix}": mean_width(l, u),
-            f"IS{int(cov*100)}_{prefix}": np.nanmean(g[f"{prefix}_IS{int(cov*100)}"].values) if f"{prefix}_IS{int(cov*100)}" in g.columns else np.nan,
-        }
-
-    for h, g in df.groupby("h_months"):
-        row = {"scope": f"h={h}m", "n": len(g)}
-        row.update({
-            "RMSE_model": rmse(g["realized"].values, g["model_point"].values),
-            "RMSE_SNB": rmse(g["realized"].values, g["forecast"].values),
-            "MAE_model": mae(g["realized"].values, g["model_point"].values),
-            "MAE_SNB": mae(g["realized"].values, g["forecast"].values),
-            "mean_p_below0": np.nanmean(g["p_below0"].values),
-            "mean_p_above2": np.nanmean(g["p_above2"].values),
-            "mean_p_in_0_2": np.nanmean(g["p_in_0_2"].values),
+            "mean_abs(median - snb)": np.nanmean(g["absdiff_median_minus_snb"]),
+            "mean(median - snb)": np.nanmean(g["diff_median_minus_snb"]),
+            "snb_inside_68_rate": np.nanmean(g["snb_in_68"]),
+            "snb_inside_90_rate": np.nanmean(g["snb_in_90"]),
+            "mean_width_68": np.nanmean(g["width_68"]),
+            "mean_width_90": np.nanmean(g["width_90"]),
+            "mean_p_below_0": np.nanmean(g["p_below_0"]),
+            "mean_p_above_2": np.nanmean(g["p_above_2"]),
         })
 
-        for cov in coverage_levels:
-            if f"model_l{int(cov*100)}" in g.columns and f"model_u{int(cov*100)}" in g.columns:
-                row.update(add_interval_metrics("x", g, "model", cov))
-            if f"snb_l{int(cov*100)}" in g.columns and f"snb_u{int(cov*100)}" in g.columns:
-                row.update(add_interval_metrics("x", g, "snb", cov))
-
-        metrics.append(row)
-
-    # overall
     g = df
-    row = {"scope": "overall", "n": len(g)}
-    row.update({
-        "RMSE_model": rmse(g["realized"].values, g["model_point"].values),
-        "RMSE_SNB": rmse(g["realized"].values, g["forecast"].values),
-        "MAE_model": mae(g["realized"].values, g["model_point"].values),
-        "MAE_SNB": mae(g["realized"].values, g["forecast"].values),
-        "mean_p_below0": np.nanmean(g["p_below0"].values),
-        "mean_p_above2": np.nanmean(g["p_above2"].values),
-        "mean_p_in_0_2": np.nanmean(g["p_in_0_2"].values),
+    rows.append({
+        "h_months": "overall",
+        "n": len(g),
+        "mean_abs(median - snb)": np.nanmean(g["absdiff_median_minus_snb"]),
+        "mean(median - snb)": np.nanmean(g["diff_median_minus_snb"]),
+        "snb_inside_68_rate": np.nanmean(g["snb_in_68"]),
+        "snb_inside_90_rate": np.nanmean(g["snb_in_90"]),
+        "mean_width_68": np.nanmean(g["width_68"]),
+        "mean_width_90": np.nanmean(g["width_90"]),
+        "mean_p_below_0": np.nanmean(g["p_below_0"]),
+        "mean_p_above_2": np.nanmean(g["p_above_2"]),
     })
-    for cov in coverage_levels:
-        if f"model_l{int(cov*100)}" in g.columns and f"model_u{int(cov*100)}" in g.columns:
-            row.update(add_interval_metrics("x", g, "model", cov))
-        if f"snb_l{int(cov*100)}" in g.columns and f"snb_u{int(cov*100)}" in g.columns:
-            row.update(add_interval_metrics("x", g, "snb", cov))
-    metrics.append(row)
 
-    metrics_df = pd.DataFrame(metrics)
-
-    return df, metrics_df
-
+    return df, pd.DataFrame(rows)
 
 # ============================================================
-# HOW TO USE (EDIT THESE MAPPINGS TO YOUR COLUMN NAMES)
+# 4) CONSOLIDATED 2x2 GRID PLOT
 # ============================================================
+def plot_trajectory_grid(df, outpath: Path, title_suffix=""):
+    """
+    Creates a 2x2 grid comparing SNB point forecasts to Model Density.
+    Aligns with the 'direct' forecasting approach [Lenza et al., 2023].
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11), sharey=True)
+    horizons = [3, 6, 9, 12]
+    axes = axes.flatten()
 
-# Example mapping if your model forecast df has columns like:
-# q05, q15, q25, q50, q75, q85, q95
-QUANTILE_COLS = {
-    "q50": "q50",
-    0.05: "q05", 0.95: "q95",   # 90%
-    0.15: "q15", 0.85: "q85",   # 70%
-    0.25: "q25", 0.75: "q75",   # 50%
-}
+    for i, h in enumerate(horizons):
+        ax = axes[i]
+        # Filter for horizon and ensure chronological order
+        g = df[df["h_months"] == h].sort_values("vintage_q").copy()
+        
+        if g.empty:
+            ax.text(0.5, 0.5, f"No Data for h={h}m", ha='center')
+            continue
+            
+        # Use string representation of PeriodIndex for X-axis labels
+        x = g["vintage_q"].dt.to_timestamp(how="end")
 
-# If you have dense quantiles q01..q99, set:
-# dense_levels = [i/100 for i in range(1, 100)]
-dense_levels = None  # set to list if available
-dense_prefix = "q"   # if columns are q01,q02,...
+        ax.fill_between(x, g["q05"], g["q95"], color='tab:blue', alpha=0.1, label="90% Interval")
+        ax.fill_between(x, g["q16"], g["q84"], color='tab:blue', alpha=0.3, label="68% Interval")
 
-# Run:
-# merged_df, metrics_table = compute_snb_benchmark_metrics(snb_path, model_fc, QUANTILE_COLS, dense_levels, dense_prefix)
+        ax.plot(x, g["median"], color='tab:blue', linestyle='--', linewidth=1.5, label=f"{MODEL_NAME} Median")
+        ax.plot(x, g["forecast"], color='tab:red', linewidth=2.5, marker='o', markersize=4, label="SNB Point Forecast")
+
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        ax.xaxis.set_minor_locator(mdates.YearLocator(1))
+
+        # Formatting
+        ax.set_title(f"Horizon: {h} Months", fontsize=14, fontweight='bold')
+
+        if i >= 2: ax.set_xlabel("Forecast Vintage (Quarter)")
+        if i % 2 == 0: ax.set_ylabel("Inflation (YoY %)")
+        ax.grid(True, linestyle='--', alpha=0.3)
+
+    # Global Legend
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, fontsize=12)
+    fig.autofmt_xdate()
+    plt.tight_layout()
+    plt.savefig(outpath, dpi=300, bbox_inches='tight')
+    plt.close()
+
+# ============================================================
+# RUN
+# ============================================================
+if __name__ == "__main__":
+    # 1. Load Data
+    snb_raw = load_snb_cube(SNB_CSV)
+    snb_path = snb_build_path(snb_raw)
+    model_fc = load_model_files(MODEL_FILES, use_timesafe=USE_TIMESAFE)
+
+    # 2. Merge - Changed to 'left' to keep recent forecasts even if actuals are missing
+    merged = snb_path.merge(model_fc, on=["vintage_q", "h_months"], how="left")
+    
+    # 3. Clean up - Keep rows where we have both a forecast and a model result
+    merged = merged.dropna(subset=["forecast", "median"]).copy()
+
+    # 4. Generate Analytics and Grid Plot
+    merged_aug, tableA = build_routeA_table(merged)
+
+    print("\n=== COMPARISON SUMMARY TABLE ===")
+    print(tableA.to_string(index=False))
+
+    # Save outputs
+    tableA.to_csv(PLOT_DIR / f"comparison_table_{MODEL_NAME}.csv", index=False)
+    
+    # Plotting
+    plot_trajectory_grid(
+        merged_aug, 
+        PLOT_DIR / f"trajectory_grid_2x2_{MODEL_NAME}.png",
+        title_suffix="(timesafe)" if USE_TIMESAFE else ""
+    )
+
+    print(f"\nResults saved to: {PLOT_DIR}")

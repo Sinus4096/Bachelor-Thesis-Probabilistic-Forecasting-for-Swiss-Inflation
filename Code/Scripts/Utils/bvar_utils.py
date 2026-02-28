@@ -161,9 +161,9 @@ class BVAR:
         for k in self.kept_indices:
             #k is the index in the original huge stack
             #mod block_size gives the variable index
-            original_var_idx = k % block_size
+            original_var_idx= k% block_size
             self.feature_var_indices.append(original_var_idx)
-        self.feature_var_indices = np.array(self.feature_var_indices)
+        self.feature_var_indices= np.array(self.feature_var_indices)
         
         #keep only unique features
         X_unique =X_combined[:, self.kept_indices]
@@ -182,8 +182,8 @@ class BVAR:
         #get dimensions
         K= self.n_features
         #manually control how much we trust exogenous vs target lags
-        theta = float(theta)
-        alpha = float(alpha_decay)    
+        theta= float(theta)
+        alpha= float(alpha_decay)    
         #prior mean: identity for first own-lag, zeros otherwise
         Phi_0= np.zeros((K, N))         
         #prior tightness matrix

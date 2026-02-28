@@ -1,3 +1,6 @@
+#want to see whether use of PCA is justified for dimensionality reduction. PCA is a technique that transforms a large set of correlated variables into a 
+#smaller set of uncorrelated variables called principal components. These components capture the majority of the variance 
+#in the original dataset, allowing us to reduce dimensionality while retaining most of the information (written with Github Copilot).
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
