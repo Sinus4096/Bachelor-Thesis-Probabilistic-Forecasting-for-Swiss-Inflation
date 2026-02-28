@@ -8,8 +8,8 @@ This project presents a comparative analysis of Machine Learning and Econometric
 The primary goal is to evaluate how well different modeling approaches can estimate the full spread of risks for Swiss headline and core inflation. The study specifically compares the performance of Quantile Regression Forests (QRF) and Bayesian Vector Autoregressions (BVAR). We thereby, want to test the following working hypotheses:
 
 - **H1:** QRF will outperform the BVAR in the short-term (1–6 months) due to its ability to handle non-linearity.
--**H2:** BVAR will show superior performance in the medium-term (6–12 months).
--**H3:** Core inflation will demonstrate more significant non-linear dynamics than headline inflation.
+- **H2:** BVAR will show superior performance in the medium-term (6–12 months).
+- **H3:** Core inflation will demonstrate more significant non-linear dynamics than headline inflation.
 
 To achieve this, we set ourselves the following key objectives:
 1. Implementation: Build and validate QRF and BVAR models tailored for Swiss macroeconomic data.
