@@ -1,3 +1,4 @@
+#visual evaluation of forecasts and interpretability results
 from __future__ import annotations
 
 import re
@@ -11,58 +12,63 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-# =========================
-# CONFIG
-# =========================
-data_type = "Headline"  # "Headline" or "Core"
-horizons = [3, 6, 9, 12]
-rolling_window = 36
+#common configuration for visual evaluation of forecasts
+#--------------------------------------------------------------------
+#select inflation measure for evaluation
+data_type= "Headline"  # "headline" or "core"
+#define monthly horizons for comparison
+horizons= [3, 6, 9, 12]
+#set rolling window size for accuracy plots
+rolling_window= 36
 
-# models to compare in plots
-models_compare = [
-    "Benchmark_ARGARCH",
-    "QRF_Default_PCA",
-    "bvar_independent_niw_hierarchical",
-]
+#models to compare in combined plots
+models_compare= ["Benchmark_ARGARCH", "QRF_Default_PCA", "bvar_independent_niw_hierarchical"]
 
-# metrics / columns in your result CSVs
-ACTUAL_COL = "Actual_YoY"
-MEDIAN_COL = "Forecast_median_YoY"
-Q05_COL = "q05_YoY"
-Q16_COL = "q16_YoY"
-Q84_COL = "q84_YoY"
-Q95_COL = "q95_YoY"
-PIT_COL = "PIT_direct"
-CRPS_COL = "CRPS_YoY_timesafe_parametric"
+#metrics / columns in your result csvs
+ACTUAL_COL= "Actual_YoY"
+MEDIAN_COL= "Forecast_median_YoY"
 
-# SHAP schema
-SHAP_PREFIX = "SHAP_"
-SHAP_BASE_COL = "BaseEffect_YoY_expost"
-SHAP_EXCLUDE = {SHAP_BASE_COL, "SHAP_Shap_Constant"}
+#quantiles for fan charts
+Q05_COL= "q05_YoY"
+Q16_COL= "q16_YoY"
+Q84_COL= "q84_YoY"
+Q95_COL= "q95_YoY"
+#calibration and score column names
+PIT_COL= "PIT_direct"
+CRPS_COL= "CRPS_YoY_timesafe_parametric"
 
-# heatmap config
-shap_heatmap_top_n = 60
-shap_heatmap_freq = "Q"   # resample frequency for heatmap ("Q" ok)
-shap_heatmap_value = "abs"
+#shap schema configuration
+SHAP_PREFIX= "SHAP_"
+SHAP_BASE_COL= "BaseEffect_YoY_expost"
+#list of columns to filter out of interpretability plots
+SHAP_EXCLUDE= {SHAP_BASE_COL, "SHAP_Shap_Constant"}
 
-# outputs
-TOP_N_FEATURES = 25
-TOP_K_LOADINGS_PER_FACTOR = 12
+#heatmap config for importance over time
+shap_heatmap_top_n= 60
+#resample frequency for visualization
+shap_heatmap_freq= "Q"   
+#ranking metric for features
+shap_heatmap_value= "abs"
 
-# hardcoded PCA models + factor summary files
-PCA_MODELS = {
+#output limits for tables
+TOP_N_FEATURES= 25
+TOP_K_LOADINGS_PER_FACTOR= 12
+
+#map model keys to specific factor loading files
+PCA_MODELS= {
     "QRF_Default_PCA": "Factor_Summary_QRF_Default_PCA.csv",
     "bvar_independent_niw_hierarchical": "Factor_Summary_bvar_independent_niw_PCA.csv",
 }
 
-# =========================
-# REGEX / PARSING
-# =========================
-HORIZON_RE = re.compile(r"(?<!\d)(\d{1,2})m(?!\d)", re.IGNORECASE)
+#parsing
+#---------------
+#compile regex to extract horizon number from filename
+HORIZON_RE= re.compile(r"(?<!\d)(\d{1,2})m(?!\d)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class FileMeta:
+    #metadata container for model results
     path: Path
     model_key: str
     variable: str
@@ -70,485 +76,496 @@ class FileMeta:
 
 
 def normalize(s: str) -> str:
+    #lowercase and strip special characters for matching
     return re.sub(r"[^a-z0-9]+", "", s.lower())
 
 
 def find_project_root(start: Path) -> Path:
-    """
-    You run from Code/, but we want the repo root such that root/Code exists.
-    """
-    cur = start.resolve()
+    #climb directory tree to find repository root
+    cur= start.resolve()
     for _ in range(12):
+        #root must contain code folder
         if (cur / "Code").exists():
             return cur
-        if cur.parent == cur:
+        #stop at filesystem root
+        if cur.parent== cur:
             break
-        cur = cur.parent
+        cur= cur.parent
     return start.resolve()
 
 
 def find_results_dir(project_root: Path) -> Path:
-    """
-    Your confirmed structure: Code/Results/Factor_Summaries
-    """
-    p = project_root / "Code" / "Results"
+    #navigate to results folder in repo
+    p= project_root / "Code" / "Results"
     if not p.exists():
-        raise FileNotFoundError(f"Results directory not found: {p}")
+        raise FileNotFoundError(f"results directory not found: {p}")
     return p
 
 
 def find_actuals_file(project_root: Path) -> Path:
-    candidates = list(project_root.rglob("data_yoy.csv"))
+    #locate yoy data file recursively
+    candidates= list(project_root.rglob("data_yoy.csv"))
+    #fallback if glob fails
     if not candidates:
-        candidates = [p for p in project_root.rglob("*.csv") if p.name.lower() == "data_yoy.csv"]
+        candidates= [p for p in project_root.rglob("*.csv") if p.name.lower()== "data_yoy.csv"]
     if not candidates:
-        raise FileNotFoundError(f"Could not find 'data_yoy.csv' under {project_root}.")
+        raise FileNotFoundError(f"could not find 'data_yoy.csv' under {project_root}.")
 
     def score(p: Path) -> int:
-        s = str(p).lower()
-        sc = 0
-        if "cleaned" in s: sc += 3
-        if "data" in s: sc += 2
-        if "code" in s: sc += 1
-        if "result" in s: sc -= 2
+        #rank paths to prefer cleaned data versions
+        s= str(p).lower()
+        sc= 0
+        if "cleaned" in s: sc+= 3
+        if "data" in s: sc+= 2
+        if "code" in s: sc+= 1
+        #penalize result folders
+        if "result" in s: sc-= 2
         return sc
 
+    #sort by score and pick best match
     candidates.sort(key=score, reverse=True)
     return candidates[0]
 
 
 def parse_filename(path: Path, model_keys: List[str]) -> Optional[FileMeta]:
-    name = path.name
-    lname = name.lower()
+    #extract metadata from result filename
+    name= path.name
+    lname= name.lower()
 
+    #detect inflation target variable
     if "headline" in lname:
-        variable = "Headline"
+        variable= "Headline"
     elif "core" in lname:
-        variable = "Core"
+        variable= "Core"
     else:
         return None
-
-    mh = HORIZON_RE.search(name)
+    #search for monthly horizon suffix
+    mh= HORIZON_RE.search(name)
     if not mh:
         return None
-    horizon = int(mh.group(1))
-
-    n_name = normalize(name)
-    matched = None
-    best = -1
+    horizon= int(mh.group(1))
+    #normalize for key matching
+    n_name= normalize(name)
+    matched= None
+    best= -1
     for key in model_keys:
-        nk = normalize(key)
+        nk= normalize(key)
+        #prefer longest matching key to avoid collisions
         if nk and nk in n_name and len(nk) > best:
-            best = len(nk)
-            matched = key
+            best= len(nk)
+            matched= key
 
     if matched is None:
         return None
+    #return metadata object
     return FileMeta(path=path, model_key=matched, variable=variable, horizon=horizon)
 
 
-# =========================
-# LOADERS
-# =========================
+#load data
+#---------------------------
 def load_actuals(actuals_path: Path, data_type: str) -> pd.Series:
-    df = pd.read_csv(actuals_path)
-    df.columns = df.columns.str.strip()
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.set_index("Date").sort_index()
+    #read realization data
+    df= pd.read_csv(actuals_path)
+    #clean header whitespace
+    df.columns= df.columns.str.strip()
+    #standardize time index
+    df["Date"]= pd.to_datetime(df["Date"], errors="coerce")
+    df= df.set_index("Date").sort_index()
+    #return requested inflation series as numeric
     return pd.to_numeric(df[data_type], errors="coerce")
 
 
 def load_forecast(path: Path, actuals: pd.Series) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    df.columns = df.columns.str.strip()
+    #load model results
+    df= pd.read_csv(path)
+    #clean column names
+    df.columns= df.columns.str.strip()
 
+    #validate presence of time columns
     for c in ["Date", "Target_date"]:
         if c not in df.columns:
             raise ValueError(f"{path.name}: missing required column '{c}'")
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Target_date"] = pd.to_datetime(df["Target_date"], errors="coerce")
+    #convert dates to objects
+    df["Date"]= pd.to_datetime(df["Date"], errors="coerce")
+    df["Target_date"]= pd.to_datetime(df["Target_date"], errors="coerce")
 
-    gt = df["Target_date"].map(actuals)
+    #map realizations onto target dates
+    gt= df["Target_date"].map(actuals)
+    #update or create yoy actuals column
     if ACTUAL_COL in df.columns:
-        df[ACTUAL_COL] = np.where(gt.notna(), gt, pd.to_numeric(df[ACTUAL_COL], errors="coerce"))
+        #fill existing column from ground truth
+        df[ACTUAL_COL]= np.where(gt.notna(), gt, pd.to_numeric(df[ACTUAL_COL], errors="coerce"))
     else:
-        df[ACTUAL_COL] = gt
+        #initialize column with mapped values
+        df[ACTUAL_COL]= gt
 
-    df = df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
-    df = df.set_index("Target_date").sort_index()
+    #ensure chronological sorting by target time
+    df= df.sort_values(["Target_date", "Date"]).reset_index(drop=True)
+    #set target index for plots
+    df= df.set_index("Target_date").sort_index()
     return df
 
 
-#save to csv
-#--------------
 def save_plot_auto(title: str, base_dir: Path):
-    """Saves the current figure using the title as a filename."""
-    # Create the directory if it doesn't exist
-    save_folder = base_dir /"Code"/ "Scripts" / "Plots_and_Tables" / "06c_visual_evaluation"
+    """saves current figure using title as filename"""
+    #set destination folder path
+    save_folder= base_dir /"Code"/ "Scripts" / "Plots_and_Tables" / "06c_visual_evaluation"
+    #ensure directory exists
     save_folder.mkdir(parents=True, exist_ok=True)
     
-    # Clean title to make it a valid filename
-    clean_title = re.sub(r'[\\/*?:"<>|]', "", title).replace(" ", "_").replace("\n", "_")
-    file_path = save_folder / f"{clean_title}.png"
+    #sanitize title for filename
+    clean_title= re.sub(r'[\\/*?:"<>|]', "", title).replace(" ", "_").replace("\n", "_")
+    #construct file path
+    file_path= save_folder / f"{clean_title}.png"
     
+    #save figure with high resolution
     plt.savefig(file_path, bbox_inches='tight', dpi=300)
     print(f"[SAVED PLOT] {file_path}")
 
-# =========================
-# PIT helper
-# =========================
-def dkw_band(n: int, alpha: float = 0.05) -> float:
+#PIT
+#-----------------
+def dkw_band(n: int, alpha: float= 0.05) -> float:
+    #calculate confidence band for pit distribution
     if n <= 0:
         return np.nan
-    return float(np.sqrt(np.log(2.0 / alpha) / (2.0 * n)))
+    #use dkw inequality formula
+    return float(np.sqrt(np.log(2.0/alpha)/(2.0*n)))
 
 
-# =========================
-# SHAP utilities
-# =========================
-FACTOR_BASE_RE = re.compile(r"^Factor_(\d+)$", re.IGNORECASE)
-FACTOR_LAG_RE  = re.compile(r"^Factor_(\d+)_lag(\d+)$", re.IGNORECASE)
+#SHAPLEY / PCA helper functions
+#-------------------------------------------------
+#regex for raw factors
+FACTOR_BASE_RE= re.compile(r"^Factor_(\d+)$", re.IGNORECASE)
+#regex for lagged factors from bvar
+FACTOR_LAG_RE= re.compile(r"^Factor_(\d+)_lag(\d+)$", re.IGNORECASE)
 
 def shap_suffix(col: str) -> str:
-    s = str(col).strip()
+    #get clean feature name without prefix
+    s= str(col).strip()
     if s.startswith(SHAP_PREFIX):
-        s = s.replace(SHAP_PREFIX, "", 1)
-    s = s.replace("Shap_", "")
+        #strip main prefix
+        s= s.replace(SHAP_PREFIX, "", 1)
+    #strip alternative prefix format
+    s= s.replace("Shap_", "")
     return s.strip()
 
 def is_factor_feature_name(name: str) -> bool:
-    """
-    name is WITHOUT SHAP_ prefix
-    """
-    n = str(name).strip()
-    n0 = n.split("_lag")[0]
+    #check if feature is a latent factor or raw variable
+    n= str(name).strip()
+    #split lag suffix to check base factor
+    n0= n.split("_lag")[0]
+    #match against factor regex patterns
     return bool(FACTOR_BASE_RE.match(n0)) or bool(FACTOR_LAG_RE.match(n))
 
 def shap_columns(df: pd.DataFrame) -> List[str]:
+    #filter columns for shap contributions excluding fixed effects
     return [c for c in df.columns if str(c).strip().startswith(SHAP_PREFIX) and str(c).strip() not in SHAP_EXCLUDE]
 
 
 def factor_shap_cols_for_model(df: pd.DataFrame, model: str) -> List[str]:
-    """
-    Hardcoded:
-      - QRF_Default_PCA: accept SHAP_Factor_k (no lag)
-      - bvar_independent_niw_hierarchical: accept SHAP_Factor_k_lagL (lagged factors)
-    """
-    cols = []
+    #isolate factor-level shap columns for specific models
+    cols= []
     for c in shap_columns(df):
-        s = shap_suffix(c)
+        s= shap_suffix(c)
+        #logic for qrf model factor format
         if model == "QRF_Default_PCA":
             if FACTOR_BASE_RE.match(s):
                 cols.append(c)
+        #logic for bvar model lagged factor format
         elif model == "bvar_independent_niw_hierarchical":
             if FACTOR_LAG_RE.match(s):
                 cols.append(c)
-        else:
-            # no PCA projection for other models
-            pass
     return cols
 
 
 def variable_shap_cols_excluding_factors(df: pd.DataFrame) -> List[str]:
-    """
-    Only SHAP_<variable> columns (excluding base/constant and excluding any Factor_*).
-    """
-    cols = []
+    #return list of raw variable shap columns
+    cols= []
     for c in shap_columns(df):
-        s = shap_suffix(c)
+        s= shap_suffix(c)
+        #skip if name matches factor pattern
         if is_factor_feature_name(s):
             continue
         cols.append(c)
     return cols
 
 
-# =========================
-# PCA weights + projection (HARD CODED)
-# =========================
+#PCA weights
+#-----------------
 def load_pca_weights(path: Path) -> pd.DataFrame:
-    """
-    Factor summary schema:
-      Date,Target,Horizon,Factor,Variable,Weight
-    sometimes headerless.
-    """
-    w = pd.read_csv(path)
-    w.columns = [str(c).strip() for c in w.columns]
-    needed = {"Date", "Target", "Horizon", "Factor", "Variable", "Weight"}
-
+    #read loadings matrix file
+    w= pd.read_csv(path)
+    #clean header strings
+    w.columns= [str(c).strip() for c in w.columns]
+    #define expected loading matrix columns
+    needed= {"Date", "Target", "Horizon", "Factor", "Variable", "Weight"}
+    #check if file is headerless
     if not needed.issubset(set(w.columns)):
-        w = pd.read_csv(path, header=None, names=["Date","Target","Horizon","Factor","Variable","Weight"])
-
-    # normalize
-    w["Target"] = w["Target"].astype(str).str.strip()
-    w["Factor"] = w["Factor"].astype(str).str.strip()
-    w["Variable"] = w["Variable"].astype(str).str.strip()
-
-    w["Horizon"] = pd.to_numeric(w["Horizon"], errors="coerce")
-    w["Weight"] = pd.to_numeric(w["Weight"], errors="coerce")
-    w = w.dropna(subset=["Target", "Horizon", "Factor", "Variable", "Weight"])
-    w["Horizon"] = w["Horizon"].astype(int)
+        #re-read with manual headers
+        w= pd.read_csv(path, header=None, names=["Date","Target","Horizon","Factor","Variable","Weight"])
+    #standardize data types for loading merge
+    w["Target"]= w["Target"].astype(str).str.strip()
+    w["Factor"]= w["Factor"].astype(str).str.strip()
+    w["Variable"]= w["Variable"].astype(str).str.strip()
+    #convert numeric fields
+    w["Horizon"]= pd.to_numeric(w["Horizon"], errors="coerce")
+    w["Weight"]= pd.to_numeric(w["Weight"], errors="coerce")
+    #remove invalid rows
+    w= w.dropna(subset=["Target", "Horizon", "Factor", "Variable", "Weight"])
+    w["Horizon"]= w["Horizon"].astype(int)
 
     return w
 
 
 def build_constant_loading_matrix(w: pd.DataFrame, target: str, horizon: int, factor_names: List[str]) -> pd.DataFrame:
-    """
-    Constant loadings over time -> average across all dates.
-    Output: index=Factor, columns=Variable
-    """
-    sub = w[(w["Target"].str.lower() == target.lower()) & (w["Horizon"] == int(horizon))].copy()
+    #average loadings over time for projection
+    sub= w[(w["Target"].str.lower()== target.lower()) & (w["Horizon"]== int(horizon))].copy()
     if sub.empty:
         return pd.DataFrame()
-
-    sub = sub[sub["Factor"].isin(factor_names)]
+    #filter for factors present in current model
+    sub= sub[sub["Factor"].isin(factor_names)]
     if sub.empty:
         return pd.DataFrame()
-
-    m = sub.groupby(["Factor", "Variable"], as_index=False)["Weight"].mean()
-    W = m.pivot(index="Factor", columns="Variable", values="Weight")
-    W = W.reindex(index=factor_names)
+    #group by factor and variable to get mean weight
+    m= sub.groupby(["Factor", "Variable"], as_index=False)["Weight"].mean()
+    #pivot to matrix format
+    W= m.pivot(index="Factor", columns="Variable", values="Weight")
+    #align index with factor list
+    W= W.reindex(index=factor_names)
     return W
 
 
 def project_pca_shap_hardcoded(df: pd.DataFrame, model: str, w: pd.DataFrame, target: str, horizon: int) -> pd.DataFrame:
-    """
-    Hardcoded projection rules:
-      - QRF_Default_PCA: SHAP_Factor_k -> SHAP_<var>
-      - bvar_independent_niw_hierarchical: SHAP_Factor_k_lagL -> SHAP_<var>_lagL
-    """
+    #map factor shapley values back to raw variable contributions
     if df is None or df.empty:
         return df
-
-    factor_cols = factor_shap_cols_for_model(df, model)
+    #identify columns to project
+    factor_cols= factor_shap_cols_for_model(df, model)
     if not factor_cols:
-        # nothing to project
         return df
-
-    # parse factor names and lag groups
-    # For QRF: all factors no lag, single group lag=None
-    # For BVAR: group by lag L: project each lag separately to var_lagL
-    parsed: List[Tuple[str, Optional[str], str]] = []
+    #parse factors and lag metadata
+    parsed: List[Tuple[str, Optional[str], str]]= []
     for c in factor_cols:
-        s = shap_suffix(c)  # e.g. Factor_3 or Factor_3_lag2
-        m0 = FACTOR_BASE_RE.match(s)
-        m1 = FACTOR_LAG_RE.match(s)
+        s= shap_suffix(c)  
+        m0= FACTOR_BASE_RE.match(s)
+        m1= FACTOR_LAG_RE.match(s)
+        #store as (factor_name, lag_id, col_name)
         if m0:
-            k = int(m0.group(1))
+            k= int(m0.group(1))
             parsed.append((f"Factor_{k}", None, c))
         elif m1:
-            k = int(m1.group(1))
-            L = int(m1.group(2))
+            k= int(m1.group(1))
+            L= int(m1.group(2))
             parsed.append((f"Factor_{k}", f"lag{L}", c))
 
-    out = df.copy()
-
+    #create copy for output
+    out= df.copy()
+    #logic for direct qrf factors
     if model == "QRF_Default_PCA":
-        factor_names = [p[0] for p in parsed]
-        # keep unique but preserve order
-        factor_names = list(dict.fromkeys(factor_names))
-        W = build_constant_loading_matrix(w, target=target, horizon=horizon, factor_names=factor_names)
+        factor_names= [p[0] for p in parsed]
+        #keep unique list
+        factor_names= list(dict.fromkeys(factor_names))
+        #get mean loading matrix
+        W= build_constant_loading_matrix(w, target=target, horizon=horizon, factor_names=factor_names)
         if W.empty:
             print(f"[WARN] PCA loadings empty for {model} {target} h={horizon}m")
             return df
-
-        # create projected cols
-        variables = list(W.columns)
+        #initialize projected columns in dataframe
+        variables= list(W.columns)
         for var in variables:
-            out[f"{SHAP_PREFIX}{var}"] = 0.0
-
-        # build factor SHAP matrix in correct order
-        col_by_factor = {p[0]: p[2] for p in parsed}  # Factor_k -> column
-        Fcols = [col_by_factor[f] for f in factor_names]
-        SF = out[Fcols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-        SF = np.nan_to_num(SF, nan=0.0)
-
-        Wn = np.nan_to_num(W.values, nan=0.0)
-        PROJ = SF @ Wn
-
+            out[f"{SHAP_PREFIX}{var}"]= 0.0
+        #build matrix of factor shap values
+        col_by_factor= {p[0]: p[2] for p in parsed}  
+        Fcols= [col_by_factor[f] for f in factor_names]
+        SF= out[Fcols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        #fill missing with zero
+        SF= np.nan_to_num(SF, nan=0.0)
+        #perform dot product projection
+        Wn= np.nan_to_num(W.values, nan=0.0)
+        PROJ= SF@Wn
+        #assign projected values to output
         for j, var in enumerate(variables):
-            out[f"{SHAP_PREFIX}{var}"] = PROJ[:, j]
-
+            out[f"{SHAP_PREFIX}{var}"]= PROJ[:, j]
         print(f"[PCA PROJECTION] {model} {target} h={horizon}m: vars={len(variables)} mean|proj|={np.abs(PROJ).mean():.6f}")
         return out
 
+    #logic for lagged bvar factors
     if model == "bvar_independent_niw_hierarchical":
-        # group by lag
-        lags = sorted({p[1] for p in parsed if p[1] is not None})
-        # factors per lag
+        #extract unique lags
+        lags= sorted({p[1] for p in parsed if p[1] is not None})
+        #project each lag group independently
         for lag in lags:
-            sub = [p for p in parsed if p[1] == lag]
-            factor_names = [p[0] for p in sub]
-            factor_names = list(dict.fromkeys(factor_names))
-
-            W = build_constant_loading_matrix(w, target=target, horizon=horizon, factor_names=factor_names)
+            sub= [p for p in parsed if p[1]== lag]
+            factor_names= [p[0] for p in sub]
+            factor_names= list(dict.fromkeys(factor_names))
+            #retrieve loadings for specific horizon
+            W= build_constant_loading_matrix(w, target=target, horizon=horizon, factor_names=factor_names)
             if W.empty:
                 print(f"[WARN] PCA loadings empty for {model} {target} h={horizon}m {lag}")
                 continue
 
-            variables = list(W.columns)
-            # create projected lagged cols
+            #init output columns for lagged variables
+            variables= list(W.columns)
             for var in variables:
-                out[f"{SHAP_PREFIX}{var}_{lag}"] = 0.0
-
-            # factor SHAP matrix in correct order
-            col_by_factor = {p[0]: p[2] for p in sub}
-            Fcols = [col_by_factor[f] for f in factor_names]
-            SF = out[Fcols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-            SF = np.nan_to_num(SF, nan=0.0)
-
-            Wn = np.nan_to_num(W.values, nan=0.0)
-            PROJ = SF @ Wn
-
+                out[f"{SHAP_PREFIX}{var}_{lag}"]= 0.0
+            #setup factor shap matrix
+            col_by_factor= {p[0]: p[2] for p in sub}
+            Fcols= [col_by_factor[f] for f in factor_names]
+            SF= out[Fcols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            SF= np.nan_to_num(SF, nan=0.0)
+            #project factors to lagged variables
+            Wn= np.nan_to_num(W.values, nan=0.0)
+            PROJ= SF@Wn
+            #assign results
             for j, var in enumerate(variables):
-                out[f"{SHAP_PREFIX}{var}_{lag}"] = PROJ[:, j]
-
+                out[f"{SHAP_PREFIX}{var}_{lag}"]= PROJ[:, j]
             print(f"[PCA PROJECTION] {model} {target} h={horizon}m {lag}: vars={len(variables)} mean|proj|={np.abs(PROJ).mean():.6f}")
 
         return out
-
     return out
 
 
-def factor_composition_table(w: pd.DataFrame, target: str, horizon: int, top_k: int = 12) -> pd.DataFrame:
-    sub = w[(w["Target"].str.lower() == target.lower()) & (w["Horizon"] == int(horizon))].copy()
+def factor_composition_table(w: pd.DataFrame, target: str, horizon: int, top_k: int= 12) -> pd.DataFrame:
+    #filter loadings for specific target and horizon
+    sub= w[(w["Target"].str.lower()== target.lower()) & (w["Horizon"]== int(horizon))].copy()
     if sub.empty:
         return pd.DataFrame()
-
-    g = (
-        sub.groupby(["Factor", "Variable"])["Weight"]
-        .agg(mean="mean", mean_abs=lambda s: s.abs().mean())
-        .reset_index()
-        .sort_values(["Factor", "mean_abs"], ascending=[True, False])
-    )
-    out = g.groupby("Factor").head(top_k).copy()
-    out["mean"] = out["mean"].round(4)
-    out["mean_abs"] = out["mean_abs"].round(4)
+    #calculate importance of variables within factors
+    g= (sub.groupby(["Factor", "Variable"])["Weight"].agg(mean="mean", mean_abs=lambda s: s.abs().mean()).reset_index().sort_values(["Factor", "mean_abs"], ascending=[True, False]))
+    #return top k loadings per factor
+    out= g.groupby("Factor").head(top_k).copy()
+    out["mean"]= out["mean"].round(4)
+    out["mean_abs"]= out["mean_abs"].round(4)
     return out
 
 
-# =========================
-# FEATURE IMPORTANCE TABLES
-# =========================
+#feature importance tables
+#----------------------------------
 def shap_feature_importance(df: pd.DataFrame, model: str) -> pd.DataFrame:
-    """
-    PCA models: use ONLY projected variable SHAP (never factor SHAP).
-    Other models: use normal SHAP excluding factors.
-    """
+    #calculate overall importance of features in model
     if model in PCA_MODELS:
-        # projected cols are SHAP_<var> and/or SHAP_<var>_lagL
-        cols = []
+        #force use of projected variables for interpreting pca models
+        cols= []
         for c in df.columns:
-            cs = str(c).strip()
+            cs= str(c).strip()
             if not cs.startswith(SHAP_PREFIX):
                 continue
             if cs in SHAP_EXCLUDE:
                 continue
-            s = shap_suffix(cs)
-            # exclude factor shap
+            s= shap_suffix(cs)
+            #exclude latent factor columns
             if is_factor_feature_name(s):
                 continue
             cols.append(c)
     else:
-        cols = variable_shap_cols_excluding_factors(df)
-
+        #use standard variables for non-pca models
+        cols= variable_shap_cols_excluding_factors(df)
     if not cols:
         return pd.DataFrame(columns=["Feature", "MeanAbsSHAP", "MeanSHAP"])
-
-    S = df[cols].apply(pd.to_numeric, errors="coerce")
-    out = pd.DataFrame({
-        "Feature": [shap_suffix(c) for c in cols],
-        "MeanAbsSHAP": S.abs().mean().values,
-        "MeanSHAP": S.mean().values,
-    }).sort_values("MeanAbsSHAP", ascending=False)
+    #calculate mean impact magnitude
+    S= df[cols].apply(pd.to_numeric, errors="coerce")
+    out= pd.DataFrame({"Feature": [shap_suffix(c) for c in cols], "MeanAbsSHAP": S.abs().mean().values, "MeanSHAP": S.mean().values}).sort_values("MeanAbsSHAP", ascending=False)
     return out
 
 
 def save_csv(df: pd.DataFrame, path: Path) -> None:
+    #ensure parent folder exists
     path.parent.mkdir(parents=True, exist_ok=True)
+    #export dataframe to disk
     df.to_csv(path, index=False)
     print(f"[SAVED] {path}")
 
 
-# =========================
-# PLOTS YOU WANT (NO DENSITY)
-# =========================
+#plotting
+#------------------
 
 def clean_label(s: str) -> str:
-    """Removes underscores and improves string formatting for plots."""
+    #format column names for chart labels
     if not s: return s
-    # Remove SHAP prefix if present for cleaner labels
-    s = s.replace(SHAP_PREFIX, "")
+    #strip prefix
+    s= s.replace(SHAP_PREFIX, "")
+    #remove underscores and title case
     return s.replace("_", " ").title()
 
+
+
 def plot_pit_grid(data: Dict[str, Dict[int, pd.DataFrame]], models: List[str], horizons: List[int], data_type: str, project_root: Path) -> None:
-    fig, axes = plt.subplots(nrows=len(horizons), ncols=len(models), figsize=(16, 18), sharex=True, sharey=True)
+    #create grid comparing pit distributions across models and horizons
+    fig, axes= plt.subplots(nrows=len(horizons), ncols=len(models), figsize=(16, 18), sharex=True, sharey=True)
     
     for i, h in enumerate(horizons):
         for j, model in enumerate(models):
-            ax = axes[i, j]
-            df = data.get(model, {}).get(h)
-
+            ax= axes[i, j]
+            df= data.get(model, {}).get(h)
+            #set axis limits for uniform comparison
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
             ax.grid(True, linestyle=":", alpha=0.6)
 
-            if i == 0:
+            #label subplots
+            if i== 0:
                 ax.set_title(clean_label(model), fontweight="bold", fontsize=12, pad=10)
-            if j == 0:
-                ax.set_ylabel(f"Horizon: {h}m\nECDF", fontweight="bold")
-            
+            if j== 0:
+                ax.set_ylabel(f"Horizon: {h}m\nECDF", fontweight="bold")            
+            #check data availability
             if df is None or PIT_COL not in df.columns:
                 ax.text(0.5, 0.5, "Data Unavailable", ha="center", va="center", color="gray")
                 continue
-
-            pit = pd.to_numeric(df[PIT_COL], errors="coerce").dropna().clip(0, 1).values
+            #prepare pit values for ecdf
+            pit= pd.to_numeric(df[PIT_COL], errors="coerce").dropna().clip(0, 1).values
             if pit.size < 5:
                 continue
+            #calculate cumulative probability
+            pit_sorted= np.sort(pit)
+            n= pit_sorted.size
+            y= np.arange(1, n+1)/n
 
-            pit_sorted = np.sort(pit)
-            n = pit_sorted.size
-            y = np.arange(1, n + 1) / n
-
+            #plot empirical cdf against ideal uniform diagonal
             ax.plot(pit_sorted, y, linewidth=2, color="#2c3e50")
             ax.plot([0, 1], [0, 1], linestyle="--", color="#e74c3c", alpha=0.8)
-
-            eps = dkw_band(n, alpha=0.05)
-            u = np.linspace(0, 1, 300)
+            #add dkw confidence bands for uniformity check
+            eps= dkw_band(n, alpha=0.05)
+            u= np.linspace(0, 1, 300)
             ax.fill_between(u, np.clip(u - eps, 0, 1), np.clip(u + eps, 0, 1), color='gray', alpha=0.1, label='95% Confidence')
 
+    #finalize calibration grid
     plt.suptitle(f"PIT Calibration: {data_type} Inflation", fontsize=18, fontweight="bold", y=1.02)
-    full_title = f"PIT Calibration {data_type} Inflation"
+    full_title= f"PIT Calibration {data_type} Inflation"
+    #save figure automatically
     save_plot_auto(full_title, project_root)
     plt.tight_layout()
     plt.show()
 
-def plot_rolling_crps(data: Dict[str, Dict[int, pd.DataFrame]], models: List[str], horizons: List[int],
-                      crps_col: str, data_type: str, rolling_window: int, project_root: Path) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(16, 11))
-    axes = axes.flatten()
-    palette = sns.color_palette("muted", len(models))
-
+def plot_rolling_crps(data: Dict[str, Dict[int, pd.DataFrame]], models: List[str], horizons: List[int], crps_col: str, data_type: str, rolling_window: int, project_root: Path) -> None:
+    #plot forecast accuracy over time via rolling crps
+    fig, axes= plt.subplots(2, 2, figsize=(16, 11))
+    axes= axes.flatten()
+    palette= sns.color_palette("muted", len(models))
     for idx, h in enumerate(horizons):
-        ax = axes[idx]
+        ax= axes[idx]
         for m_idx, model in enumerate(models):
-            df = data.get(model, {}).get(h)
+            df= data.get(model, {}).get(h)
             if df is None or crps_col not in df.columns:
                 continue
-            s = pd.to_numeric(df[crps_col], errors="coerce")
-            roll = s.rolling(window=rolling_window, min_periods=rolling_window).mean()
+            #extract crps values
+            s= pd.to_numeric(df[crps_col], errors="coerce")
+            #apply rolling window for smoothing
+            roll= s.rolling(window=rolling_window, min_periods=rolling_window).mean()
+            #plot line for each model
             ax.plot(roll.index, roll.values, linewidth=2.5, label=clean_label(model), color=palette[m_idx])
 
+        #labels and formatting
         ax.set_title(f"{data_type} - {h}m Horizon", fontweight="bold", loc='left')
         ax.set_ylabel("Mean CRPS (Lower is Better)")
         ax.grid(True, alpha=0.3)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-        
-        if idx == 0:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))        
+        #place legend only on first chart
+        if idx== 0:
             ax.legend(frameon=True, facecolor='white', shadow=True)
-
+    #finalize rolling accuracy chart
     plt.suptitle(f"Rolling Forecast Accuracy ({rolling_window}m Window)", fontsize=18, fontweight="bold", y=0.98)
-    full_title = f"Rolling CRPS {data_type} Inflation"
+    full_title= f"Rolling CRPS {data_type} Inflation"
     save_plot_auto(full_title, project_root)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
@@ -556,144 +573,134 @@ def plot_rolling_crps(data: Dict[str, Dict[int, pd.DataFrame]], models: List[str
 
 
 def plot_shap_heatmap(df: pd.DataFrame, model: str, h: int, data_type: str, project_root: Path) -> None:
+    #generate heatmap of feature contributions over time
     if df is None or df.empty:
         return
-
-    # 1. Ensure the index is a DatetimeIndex
-    # This prevents the 'Jan 1970' epoch bug
+    #validate datetime index
     if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-
-    # Column selection logic (same as before)
+        df.index= pd.to_datetime(df.index)
+    #select columns based on model type
     if model in PCA_MODELS:
-        shap_cols = [c for c in df.columns if str(c).startswith(SHAP_PREFIX) and 
-                     str(c) not in SHAP_EXCLUDE and not is_factor_feature_name(shap_suffix(c))]
+        #use projected columns for pca interpretability
+        shap_cols= [c for c in df.columns if str(c).startswith(SHAP_PREFIX) and str(c) not in SHAP_EXCLUDE and not is_factor_feature_name(shap_suffix(c))]
     else:
-        shap_cols = variable_shap_cols_excluding_factors(df)
+        #use raw variables for standard models
+        shap_cols= variable_shap_cols_excluding_factors(df)
 
     if not shap_cols: 
         return
-
-    S = df[shap_cols].copy()
-
-    # 2. Resampling if requested
+    #copy shapley data
+    S= df[shap_cols].copy()
+    #resample if frequency specified
     if shap_heatmap_freq:
-        S = S.resample(shap_heatmap_freq).mean()
+        S= S.resample(shap_heatmap_freq).mean()
 
-    # Ranking and cleaning (same as before)
-    rank = S.abs().mean().sort_values(ascending=False)
-    top_cols = list(rank.head(shap_heatmap_top_n).index)
-    S_plot = S[top_cols]
-    S_plot = S_plot.rename(columns={c: clean_label(shap_suffix(c)) for c in S_plot.columns})
+    #rank variables by absolute average impact
+    rank= S.abs().mean().sort_values(ascending=False)
+    #isolate top n features
+    top_cols= list(rank.head(shap_heatmap_top_n).index)
+    S_plot= S[top_cols]
+    #clean variable names for chart axis
+    S_plot= S_plot.rename(columns={c: clean_label(shap_suffix(c)) for c in S_plot.columns})
 
     plt.figure(figsize=(16, 10))
-    
-    # Using Viridis for high contrast (Blue/Purple to Yellow)
-    # Transpose the data (T) so dates are on the x-axis
-    ax = sns.heatmap(S_plot.T, cmap="viridis", cbar_kws={'label': 'Contribution to Forecast'})
-    
-    # 3. Fix the X-Axis Labels
-    # Since heatmaps treat the x-axis as categorical (0, 1, 2...), 
-    # we manually set the labels to the date strings formatted the way you like.
-    
-    # Generate labels: only showing year/month to avoid 'time' appearing
-    date_labels = [d.strftime('%Y-%m') for d in S_plot.index]
-    
-    # Determine how many labels to show to avoid overcrowding (e.g., every 4th label)
-    n_labels = len(date_labels)
-    step = max(1, n_labels // 12)  # Aim for ~12 labels across the axis
-    
+    #create heatmap using transposed matrix
+    ax= sns.heatmap(S_plot.T, cmap="viridis", cbar_kws={'label': 'Contribution to Forecast'})    
+    #manual date label formatting for x-axis
+    date_labels= [d.strftime('%Y-%m') for d in S_plot.index]    
+    #thin out labels for readability
+    n_labels= len(date_labels)
+    step= max(1, n_labels //12)      
+    #apply tick positions and labels
     ax.set_xticks(np.arange(n_labels)[::step])
-    ax.set_xticklabels(date_labels[::step], rotation=45, ha='right')
-    
+    ax.set_xticklabels(date_labels[::step], rotation=45, ha='right')    
+    #titles and save
     plt.title(f"SHAP Impact Analysis: {clean_label(model)} (h={h}m)\nTarget: {data_type} Inflation", 
               fontweight="bold", fontsize=16, pad=25)
     plt.xlabel("Forecast Target Date", fontweight="bold")
     plt.ylabel("Top Economic Indicators", fontweight="bold")
-    full_title = f"SHAP Impact Analysis {clean_label(model)} h={h}m Target {data_type}"
+    full_title= f"SHAP Impact Analysis {clean_label(model)} h={h}m Target {data_type}"
     save_plot_auto(full_title, project_root)
     plt.tight_layout()
     plt.show()
 
 def plot_fan_chart_grid(data: Dict[str, Dict[int, pd.DataFrame]], models: List[str], horizons: List[int], data_type: str, project_root: Path) -> None:
-    fig, axes = plt.subplots(nrows=len(horizons), ncols=len(models), figsize=(18, 14), sharex=False, sharey=False)
+    #plot grid of fan charts showing predictive quantiles
+    fig, axes= plt.subplots(nrows=len(horizons), ncols=len(models), figsize=(18, 14), sharex=False, sharey=False)
 
     for i, h in enumerate(horizons):
         for j, model in enumerate(models):
-            ax = axes[i, j]
-            df = data.get(model, {}).get(h)
-
-            # Titles and Labels
+            ax= axes[i, j]
+            df= data.get(model, {}).get(h)
+            #label top columns with model keys
             if i == 0:
                 ax.set_title(clean_label(model), fontweight="bold", fontsize=12, pad=15)
+            #label rows with horizon months
             if j == 0:
                 ax.set_ylabel(f"Horizon {h}m", fontweight="bold", fontsize=10)
-
             ax.grid(True, linestyle="--", alpha=0.3)
-
+            #handle empty data cells
             if df is None or MEDIAN_COL not in df.columns:
                 ax.text(0.5, 0.5, "No Data", ha="center", va="center", color="gray")
                 continue
-
-            # 1. Plot Actuals (Black)
+            #plot realization line in black
             if ACTUAL_COL in df.columns:
-                line_act, = ax.plot(df.index, df[ACTUAL_COL], color='black', linewidth=1.8, label="Actual")
-            
-            # 2. Plot Median (Orange for high contrast)
-            line_med, = ax.plot(df.index, df[MEDIAN_COL], color='#ff7f0e', linewidth=2.2, label="Median Forecast")
-
-            # 3. Fan Layers (Quantiles)
+                line_act,= ax.plot(df.index, df[ACTUAL_COL], color='black', linewidth=1.8, label="Actual")
+          
+            #plot median forecast in high-contrast orange
+            line_med,= ax.plot(df.index, df[MEDIAN_COL], color='#ff7f0e', linewidth=2.2, label="Median Forecast")
+            #add 68% interval fan layer
             if all(c in df.columns for c in [Q16_COL, Q84_COL]):
-                fill_68 = ax.fill_between(df.index, df[Q16_COL], df[Q84_COL], color='#1f77b4', alpha=0.35, label="68% Prediction Interval")
-
+                fill_68= ax.fill_between(df.index, df[Q16_COL], df[Q84_COL], color='#1f77b4', alpha=0.35, label="68% Prediction Interval")
+            #add 90% interval fan layer
             if all(c in df.columns for c in [Q05_COL, Q95_COL]):
-                fill_90 = ax.fill_between(df.index, df[Q05_COL], df[Q95_COL], color='#1f77b4', alpha=0.15, label="90% Prediction Interval")
-
-            # Clean up X-Axis dates
+                fill_90= ax.fill_between(df.index, df[Q05_COL], df[Q95_COL], color='#1f77b4', alpha=0.15, label="90% Prediction Interval")
+            #standardize x-axis date labels
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
             plt.setp(ax.get_xticklabels(), rotation=0, ha="center")
 
-    # Add a single, clear legend for the whole figure
-    handles, labels = axes[0, 0].get_legend_handles_labels()
+    #set shared legend at bottom of grid
+    handles, labels= axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncol=4, fontsize=12, frameon=True, bbox_to_anchor=(0.5, -0.02))
-
+    #finalize fan chart grid
     plt.suptitle(f"Predictive Quantiles (Fan Charts) – {data_type}", fontsize=20, fontweight="bold", y=1.02)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.98]) # Make room for the legend at the bottom
-    full_title = f"Predictive Quantiles (Fan Charts) – {data_type}"
+    plt.tight_layout(rect=[0, 0.03, 1, 0.98]) 
+    full_title= f"Predictive Quantiles (Fan Charts) – {data_type}"
     save_plot_auto(full_title, project_root)
     plt.show()
 
-# =========================
-# MAIN
-# =========================
+#run
+#----------------
 def main() -> None:
+    #initialize plotting theme
     sns.set_theme(style="whitegrid")
 
-    script_dir = Path(__file__).resolve().parent
-    project_root = find_project_root(script_dir)
-    results_dir = find_results_dir(project_root)
-    fs_dir = results_dir / "Factor_Summaries"
-    out_dir = project_root /"Code"/ "Scripts" / "Plots_and_Tables" / "06c_visual_evaluation" / "Interpretability"
+    #setup project paths
+    script_dir= Path(__file__).resolve().parent
+    project_root= find_project_root(script_dir)
+    results_dir= find_results_dir(project_root)
+    fs_dir= results_dir / "Factor_Summaries"
+    #define output folder for CSVs
+    out_dir= project_root /"Code"/ "Scripts" / "Plots_and_Tables" / "06c_visual_evaluation" / "Interpretability"
     out_dir.mkdir(parents=True, exist_ok=True)
+    #locate ground truth file
+    actuals_path= find_actuals_file(project_root)
 
-    actuals_path = find_actuals_file(project_root)
+    #log locations for console review
+    print(f"project root: {project_root}")
+    print(f"results dir  : {results_dir}")
+    print(f"factor dir   : {fs_dir}")
+    print(f"actuals file : {actuals_path}")
 
-    print(f"Project root: {project_root}")
-    print(f"Results dir  : {results_dir}")
-    print(f"Factor dir   : {fs_dir}")
-    print(f"Actuals file : {actuals_path}")
-
-    actuals = load_actuals(actuals_path, data_type)
-
-    # -------------------------
-    # Load forecast result CSVs
-    # -------------------------
-    data: Dict[str, Dict[int, pd.DataFrame]] = {m: {} for m in models_compare}
-
-    found: List[FileMeta] = []
+    #load inflation realizations
+    actuals= load_actuals(actuals_path, data_type)
+    #initialize results structure
+    data: Dict[str, Dict[int, pd.DataFrame]]= {m: {} for m in models_compare}
+    #scan for valid forecast result files
+    found: List[FileMeta]= []
     for p in results_dir.rglob("*.csv"):
-        meta = parse_filename(p, models_compare)
+        meta= parse_filename(p, models_compare)
         if meta is None:
             continue
         if meta.variable != data_type:
@@ -701,112 +708,96 @@ def main() -> None:
         if meta.horizon not in horizons:
             continue
         found.append(meta)
-
-    if not found:
-        raise RuntimeError(
-            "No matching forecast CSVs found.\n"
-            f"Need filenames containing Core/Headline, Xm horizon, and one of: {models_compare}"
-        )
-
-    errors = []
+    #process and load each identified file
+    errors= []
     for meta in found:
         try:
-            df = load_forecast(meta.path, actuals)
-            data[meta.model_key][meta.horizon] = df
+            df= load_forecast(meta.path, actuals)
+            data[meta.model_key][meta.horizon]= df
         except Exception as e:
             errors.append((meta.path, str(e)))
 
-    print("\nLoaded horizons per model:")
+    #log loading summary
     for m in models_compare:
         print(f"  - {m}: {sorted(data[m].keys())}")
-
+    #show truncated error log if files failed
     if errors:
-        print("\nSome files failed to load (showing up to 10):")
+        print("\nsome files failed to load (showing up to 10):")
         for p, msg in errors[:10]:
             print(f"  - {p}: {msg}")
-
-    # -------------------------
-    # Load PCA factor summaries (hardcoded)
-    # -------------------------
-    pca_weights: Dict[str, pd.DataFrame] = {}
+    #load factor summaries for pca projection
+    pca_weights: Dict[str, pd.DataFrame]= {}
     for m, fname in PCA_MODELS.items():
-        fpath = fs_dir / fname
+        fpath= fs_dir / fname
         if not fpath.exists():
-            print(f"[WARN] Missing factor summary for {m}: {fpath}")
+            print(f"[WARN] missing factor summary for {m}: {fpath}")
             continue
-        pca_weights[m] = load_pca_weights(fpath)
-        print(f"[OK] Loaded factor summary for {m}: {fpath}")
+        pca_weights[m]= load_pca_weights(fpath)
+        print(f"[OK] loaded factor summary for {m}: {fpath}")
 
-    # -------------------------
-    # Project PCA SHAP -> variables (hardcoded)
-    # -------------------------
+    #project latent factors to variables in results dictionary
     for m in PCA_MODELS.keys():
         if m not in pca_weights:
             continue
-        w = pca_weights[m]
+        w= pca_weights[m]
         for h in horizons:
-            df = data.get(m, {}).get(h)
+            df= data.get(m, {}).get(h)
             if df is None:
                 continue
-            data[m][h] = project_pca_shap_hardcoded(df, model=m, w=w, target=data_type, horizon=h)
-
-    # Inside main():
-    # 1) PIT
+            #update entry with projected variable shapley values
+            data[m][h]= project_pca_shap_hardcoded(df, model=m, w=w, target=data_type, horizon=h)
+    #generate pit calibration grid
     plot_pit_grid(data, models_compare, horizons, data_type, project_root)
-
-    # 2) Rolling CRPS
+    #generate rolling crps accuracy charts
     plot_rolling_crps(data, models_compare, horizons, CRPS_COL, data_type, rolling_window, project_root)
-
-    # 4) Fan charts
+    #generate predictive interval fan charts
     plot_fan_chart_grid(data, models_compare, horizons, data_type, project_root)
-
-    # 7) SHAP heatmaps
+    #generate shap contribution heatmaps for each model/horizon
     for m in models_compare:
         for h in horizons:
-            df = data.get(m, {}).get(h)
+            df= data.get(m, {}).get(h)
             if df is not None:
                 plot_shap_heatmap(df, model=m, h=h, data_type=data_type, project_root=project_root)
 
-    # -------------------------
-    # 5) Feature importance tables (print + CSV)
-    # -------------------------
+    #export feature importance tables
     for m in models_compare:
-        all_rows = []
+        all_rows= []
         for h in horizons:
-            df = data.get(m, {}).get(h)
+            df= data.get(m, {}).get(h)
             if df is None:
                 continue
-            imp = shap_feature_importance(df, model=m)
-            print(f"\n=== FEATURE IMPORTANCE (Top {TOP_N_FEATURES}) | {data_type} | {m} | h={h}m ===")
+            #calculate importance metrics
+            imp= shap_feature_importance(df, model=m)
+            print(f"\n FEATURE IMPORTANCE (Top {TOP_N_FEATURES}) | {data_type} | {m} | h={h}m ")
             if imp.empty:
                 print("  (empty)")
                 continue
             print(imp.head(TOP_N_FEATURES).to_string(index=False))
-
-            imp2 = imp.copy()
+            #package for batch export
+            imp2= imp.copy()
             imp2.insert(0, "Model", m)
             imp2.insert(1, "Target", data_type)
             imp2.insert(2, "Horizon", h)
             all_rows.append(imp2)
 
+            #save specific horizon csv
             save_csv(imp.head(500), out_dir / f"feature_importance_{data_type}_{m}_h{h}m.csv")
-
+        #save combined csv for all horizons
         if all_rows:
             save_csv(pd.concat(all_rows, ignore_index=True), out_dir / f"feature_importance_{data_type}_{m}_ALL.csv")
-
-    # -------------------------
-    # 6) Factor composition tables (print + CSV)
-    # -------------------------
+    #export pca factor composition details
     for m, w in pca_weights.items():
         for h in horizons:
-            comp = factor_composition_table(w, target=data_type, horizon=h, top_k=TOP_K_LOADINGS_PER_FACTOR)
-            print(f"\n=== FACTOR COMPOSITION (Top {TOP_K_LOADINGS_PER_FACTOR}) | {data_type} | {m} | h={h}m ===")
+            comp= factor_composition_table(w, target=data_type, horizon=h, top_k=TOP_K_LOADINGS_PER_FACTOR)
+            print(f"\n FACTOR COMPOSITION (Top {TOP_K_LOADINGS_PER_FACTOR}) | {data_type} | {m} | h={h}m ")
             if comp.empty:
                 print("  (empty)")
                 continue
             print(comp.to_string(index=False))
+            #export composition csv
             save_csv(comp, out_dir / f"factor_composition_{data_type}_{m}_h{h}m.csv")
 
 
 if __name__ == "__main__":
+    #run evaluation workflow
     main()

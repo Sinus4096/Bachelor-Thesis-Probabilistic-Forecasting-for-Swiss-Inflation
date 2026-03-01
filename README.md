@@ -25,7 +25,9 @@ To run the models, navigate to the Code directory and execute the desired script
 cd Code
 python Scripts/Models/bvar_model.py --config Configs/bvar_natural_niw.yaml
 ```
-
+---
+## Acknowledgements
+Special thanks to Prof. Dr. Francesco Audrino for supervision and guidance.
 
 ---
 ## Source Code Directory Tree
@@ -54,6 +56,4 @@ python Scripts/Models/bvar_model.py --config Configs/bvar_natural_niw.yaml
 ├── LICENSE                 
 └── README.md     
 ```
----
-## Acknowledgements
-Special thanks to Prof. Dr. Francesco Audrino for supervision and guidance.
+

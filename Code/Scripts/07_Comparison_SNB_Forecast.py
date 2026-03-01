@@ -53,12 +53,10 @@ def load_snb_cube(csv_path: Path) -> pd.DataFrame:
             break
     if start is None:
         raise ValueError('header row not found in snb csv')
-
     #load csv starting from identified header row
     df= pd.read_csv(csv_path, sep=";", quotechar='"', skiprows=start, dtype=str)
     #rename snb internal columns to readable names
     df= df.rename(columns={"Date": "target_q", "D0": "series", "D1": "kind", "Value": "value"})
-
     #strip whitespace from categorical columns
     for c in ["target_q", "series", "kind"]:
         df[c]= df[c].astype(str).str.strip()

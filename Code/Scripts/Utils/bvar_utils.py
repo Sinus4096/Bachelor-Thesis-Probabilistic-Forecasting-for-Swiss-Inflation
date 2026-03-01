@@ -643,91 +643,103 @@ class BVAR:
         #-------------------------------------
         elif 'natural_niw' in self.prior_type:
             #hyperparams
+            #get intercept prior variance scale
             a3= float(self.params.get('alpha', 100.0))
-            #use instance-level cache for tuning (like minnesota)
-            cache_key = ("natural_niw", horizon, int(self.n_features), int(self.n_vars))
+            #use instance-level cache for tuning like minnesota to avoid redundant calcs
+            cache_key= ("natural_niw", horizon, int(self.n_features), int(self.n_vars))
             #choose/tune lambda/theta/decay 
             if fixed_lambda is not None:
-                #use provided lambda
+                #use provided lambda for current window
                 best_lam= float(fixed_lambda)
+                #get default theta from params
                 best_theta= float(self.params.get('theta', 0.01))
+                #get default lag decay
                 best_decay= float(self.params.get('alpha_decay', 2.0))
             else:
-                # reuse cached tuning if available
+                #reuse cached tuning if available for efficiency
                 if hasattr(self, "_niw_tuned_cache") and cache_key in self._niw_tuned_cache:
-                    best_lam, best_theta, best_decay = self._niw_tuned_cache[cache_key]
+                    #extract best found params from cache
+                    best_lam, best_theta, best_decay= self._niw_tuned_cache[cache_key]
                 else:
-                    # init cache if missing
+                    #init cache if missing on first run
                     if not hasattr(self, "_niw_tuned_cache"):
-                        self._niw_tuned_cache = {}
+                        self._niw_tuned_cache= {}
 
-                    # horizon-aware grids (same philosophy as your improved minnesota ones)
+                    #horizon-aware grids (same philosophy as improved minnesota ones)
                     if horizon <= 3:
-                        lambda_grid = [0.01, 0.02, 0.03]
-                        theta_grid  = [0.01, 0.03, 0.05]
-                        decay_grid  = [1.5, 2.0]
+                        #grid for short-term forecasts
+                        lambda_grid= [0.01, 0.02, 0.03]
+                        theta_grid= [0.01, 0.03, 0.05]
+                        decay_grid= [1.5, 2.0]
                     else:
-                        lambda_grid = [0.02, 0.03]
-                        theta_grid  = [0.01, 0.03]
-                        decay_grid  = [2.0, 2.5]
+                        #grid for long-term forecasts
+                        lambda_grid= [0.02, 0.03]
+                        theta_grid= [0.01, 0.03]
+                        decay_grid= [2.0, 2.5]
 
+                    #tuning settings same as minnesota for consistency
+                    #start eval later to ensure enough training data
+                    start_eval= max(horizon + 24, int(0.75 * len(data)))
+                    #step size for tuning loop speed
+                    step_tune= 4
+                    #small number of draws for tuning performance
+                    n_draws_tune= 150
+                    #burn in for tuning chains
+                    burn_in_tune= 50
 
-                    # tuning settings (same as minnesota)
-                    start_eval   = max(horizon + 24, int(0.75 * len(data)))
-                    step_tune    = 4
-                    n_draws_tune = 150
-                    burn_in_tune = 50
+                    #target variable for crps evaluation
+                    #get all cols with target prefix
+                    target_cols= [c for c in data.columns if "target_" in c]
+                    #evaluate against primary target
+                    target_col= target_cols[0]
 
-                    # target variable for CRPS evaluation
-                    target_cols = [c for c in data.columns if "target_" in c]
-                    target_col  = target_cols[0]
+                    #init best score tracker with infinity
+                    best_score= np.inf
+                    #init best params with first grid values
+                    best_params_tuple= (lambda_grid[0], theta_grid[0], decay_grid[0])
 
-                    best_score = np.inf
-                    best_params_tuple = (lambda_grid[0], theta_grid[0], decay_grid[0])
-
+                    #loop through lambda grid
                     for lam in lambda_grid:
+                        #loop through theta grid
                         for theta in theta_grid:
+                            #loop through decay grid
                             for dec in decay_grid:
-                                p_params = {"theta": float(theta), "alpha_decay": float(dec), "alpha": float(a3)}
+                                #setup params for current grid point
+                                p_params= {"theta": float(theta), "alpha_decay": float(dec), "alpha": float(a3)}
 
-                                score = rolling_crps_score(
-                                    data=data,
-                                    target_col=target_col,
-                                    target_idx=0,
-                                    horizon=horizon,
-                                    prior_type="natural_niw",
-                                    prior_params=p_params,
-                                    fixed_lambda=float(lam),     # IMPORTANT to avoid recursion
-                                    start_eval=start_eval,
-                                    step=step_tune,
-                                    n_draws=n_draws_tune,
-                                    burn_in=burn_in_tune
-                                )
+                                #calc rolling crps for grid point
+                                score= rolling_crps_score(data=data, target_col=target_col, target_idx=0, horizon=horizon,
+                                    prior_type="natural_niw", prior_params=p_params, fixed_lambda=float(lam), start_eval=start_eval, step=step_tune,
+                                    n_draws=n_draws_tune,burn_in=burn_in_tune)
 
+                                #update best parameters if current score is lower
                                 if score < best_score:
-                                    best_score = score
-                                    best_params_tuple = (float(lam), float(theta), float(dec))
+                                    best_score= score
+                                    best_params_tuple= (float(lam), float(theta), float(dec))
 
-                    best_lam, best_theta, best_decay = best_params_tuple
-                    self._niw_tuned_cache[cache_key] = (best_lam, best_theta, best_decay)
+                    #extract winners from tuning
+                    best_lam, best_theta, best_decay= best_params_tuple
+                    #store winning combination in cache
+                    self._niw_tuned_cache[cache_key]= (best_lam, best_theta, best_decay)
 
             #persist chosen params so forecast/eval sees them
             self.params['lambda']= best_lam
             self.params['theta']= best_theta
             self.params['alpha_decay']= best_decay
 
-            #build sigmas for predictors& remove intercept to calc variance of features only
+            #build sigmas for predictors & remove intercept to calc variance of features only
             X_no_intercept= X[:, 1:]
+            #init empty list for feature scales
             sigmas_x_all= []
             for j in range(X_no_intercept.shape[1]):
                 #calc first differences for predictor scale
                 r= np.diff(X_no_intercept[:, j])
-                #avoid zero variance issues
+                #avoid zero variance issues with fallback value
                 sigmas_x_all.append(np.std(r) if r.size > 1 else 0.1)
+            #convert scales to array
             sigmas_x_all= np.array(sigmas_x_all)
             #get minnesota-style prior moments for conjugate setup
             Phi_0, Psi_0= self.natural_moments(N, best_lam, a3, sigmas, sigmas_x_all, best_theta, best_decay)
-
             #standard mniw posterior 
             nu_0= N + 2
             #diagonal prior scale matrix
