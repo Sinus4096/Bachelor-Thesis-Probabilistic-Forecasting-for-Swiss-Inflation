@@ -621,3 +621,54 @@ adf_table.to_csv(save_name)
 #as the acf shows clear seasonal spikes when taking diff alone it's not stationary either
 #decision for CPI: like reference paper 
 
+
+
+
+
+#-------------------------------------------
+# ACF and PACF plots for YoY CPI to show persistence in chapter 2
+#-------------------------------------------
+
+#reload initial data to avoid the 2012 truncation leakage split applied earlier
+df_initial= pd.read_csv(path, index_col='Date', parse_dates=True)
+#calculate YoY (12-month percentage change) for Core and Headline
+df_yoy_initial= df_initial[['Headline_CPI', 'Core_CPI']].pct_change(12).dropna()*100
+#variables to plot
+yoy_vars= ['Core_CPI', 'Headline_CPI']
+n_vars =len(yoy_vars)
+
+#set the nice colors from the detrended section
+main_color ='#2E4053'  
+ci_color ='#AED6F1'
+#create figure
+fig, axes= plt.subplots(nrows=n_vars, ncols=2, figsize=(10, n_vars*2.2), squeeze=False)
+
+#loop through Core and Headline
+for i, var_name in enumerate(yoy_vars):
+    series = df_yoy_initial[var_name].dropna()
+    clean_name = var_name.replace('_', ' ')    
+    #ACF plot
+    plot_acf(series, ax=axes[i, 0], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5}, alpha=0.05, 
+             title=f"ACF: YoY {clean_name}")  
+    # PACF plot
+    plot_pacf(series, ax=axes[i, 1], lags=40, color=main_color, vlines_kwargs={"colors": main_color, "linewidth": 1.5}, alpha=0.05, 
+              title=f"PACF: YoY {clean_name}")
+    
+    #styling
+    for ax in axes[i]:
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_ylim(-1.1, 1.1)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+        if len(ax.collections) > 1:
+            ax.collections[1].set_color(ci_color)
+            ax.collections[1].set_alpha(0.3)
+
+#figure title
+fig.suptitle('ACF & PACF Plots of YoY Inflation (Initial Data)', fontsize=18, fontweight='bold')
+
+#plot and save
+plt.tight_layout()
+save_name = "Code/Scripts/Plots_and_Tables/02_eda_raw/ACF_PACF_YoY_CPI.png"
+plt.savefig(save_name, dpi=300)
