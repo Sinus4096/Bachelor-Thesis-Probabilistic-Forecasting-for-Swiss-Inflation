@@ -133,80 +133,57 @@ def make_factor_features_time_safe(X_train, X_test, pca_cols, keep_cols, config,
     bundle = {"r": r, "pca_cols": pca_cols, "keep_cols": keep_cols, "scaler": scaler, "pca": pca,}
     return X_train_final, X_test_final, bundle
 
-#hybrid model with elastic net mean
-#----------------------------------
 
-def _feasible_tscv(n: int, gap: int, max_splits: int = 5):
-    # conservative test_size
-    test_size = max(6, min(12, n // 6))
-    # feasibility: n >= (n_splits+1)*test_size + n_splits*gap
-    max_possible = int((n - test_size) // (test_size + gap))
-    n_splits = max(2, min(max_splits, max_possible))
-    if n_splits < 2:
-        return None
-    return TimeSeriesSplit(n_splits=n_splits, gap=gap, test_size=test_size)
-
-def fit_enet_mean_and_residuals(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_test: pd.DataFrame,
-    h: int,
-    pub_lag: int = 2,
-    max_splits: int = 5,
-):
-    """
-    Returns:
-      y_resid_train: cross-fitted residuals on training window (Series)
-      mean_test: scalar mean prediction at X_test (float)
-      mean_train_cf: cross-fitted mean predictions on training window (Series)
-    """
-    # force numeric and align
-    X_train = X_train.apply(pd.to_numeric, errors="coerce")
-    X_test = X_test.apply(pd.to_numeric, errors="coerce")
-
-    # drop NaNs in y; align X
-    y_train = y_train.dropna()
-    X_train = X_train.loc[y_train.index]
-
-    if len(y_train) < 40 or y_train.std() == 0:
-        # not enough signal -> fallback mean=0, residual=y
-        mean_test = 0.0
-        mean_train_cf = pd.Series(0.0, index=y_train.index)
-        return (y_train - mean_train_cf), mean_test, mean_train_cf
-
-    gap = h + pub_lag
-    cv = _feasible_tscv(len(y_train), gap=gap, max_splits=max_splits)
-
-    # If CV is not feasible, fallback to 2 splits with tiny test_size and gap,
-    # otherwise just do simple fit and accept in-sample preds
-    alphas = np.logspace(-4, 1.5, 60)
-    l1_ratio = [0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 0.95]
-
-    model = Pipeline([
-        ("imp", SimpleImputer(strategy="median")),
-        ("sc", StandardScaler()),
-        ("enet", ElasticNetCV(
-            l1_ratio=l1_ratio,
-            alphas=alphas,
-            cv=cv if cv is not None else 3,
-            n_jobs=-1,
-            max_iter=1_000_000,
-            tol=1e-4,
-        )),
-    ])
-
-    if cv is not None:
-        # cross-fitted mean on train (prevents overfit residuals)
-        mean_train_cf = cross_val_predict(model, X_train, y_train, cv=cv, method="predict")
-        mean_train_cf = pd.Series(mean_train_cf, index=y_train.index)
+#-----------------------
+#Robust Linear Model Fitting (In-Sample)
+#-----------------------
+def fit_enet_mean_and_residuals(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame, h: int, pub_lag: int= 2):
+    #convert train features to numeric
+    X_train= X_train.apply(pd.to_numeric, errors="coerce")
+    #convert test features to numeric
+    X_test= X_test.apply(pd.to_numeric, errors="coerce")
+    #drop missing target values
+    y_train= y_train.dropna()
+    #align feature matrix with cleaned targets
+    X_train= X_train.loc[y_train.index]
+    #get sample size for cv split logic
+    n_samples= len(y_train)
+    #check for sufficient samples or zero variance
+    if n_samples < 30 or float(y_train.std())== 0.0:
+        #return original target and zero mean if insufficient
+        return y_train.copy(), 0.0
+    #determine cv splits based on sample count
+    if n_samples < 50:
+        n_splits= 2
+    elif n_samples < 100:
+        n_splits= 3
     else:
-        # last-resort: in-sample fit (less ideal but stable)
-        model.fit(X_train, y_train)
-        mean_train_cf = pd.Series(model.predict(X_train), index=y_train.index)
-
-    # fit final mean model on full train for test prediction
-    model.fit(X_train, y_train)
-    mean_test = float(model.predict(X_test)[0])
-
-    y_resid_train = y_train - mean_train_cf
-    return y_resid_train, mean_test, mean_train_cf
+        n_splits= 5
+    #calculate gap for time series cross validation
+    cv_gap= h + pub_lag
+    #initialize tscv object
+    tscv= TimeSeriesSplit(n_splits=n_splits, gap=cv_gap)
+    #setup alpha grid for elastic net
+    alphas= np.logspace(-3, 2, 50)
+    #setup l1 ratio grid
+    l1_ratio= [0.1, 0.5, 0.7, 0.9, 0.95]
+    #define preprocessing and model pipeline
+    pipeline= Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler()), ("enet", ElasticNetCV(l1_ratio=l1_ratio, alphas=alphas, cv=tscv, n_jobs=-1, max_iter=100_000, selection='random', tol=1e-3))])
+    #fit linear pipeline
+    try:
+        pipeline.fit(X_train, y_train)
+    except Exception:
+        #return fallback if fit fails
+        return y_train.copy(), 0.0
+    #get in-sample predictions
+    mean_train= pipeline.predict(X_train)
+    #get out-of-sample prediction point
+    mean_test= float(pipeline.predict(X_test)[0])
+    #calculate residuals for training
+    y_resid_train= y_train - mean_train
+    #check if residuals reduced variance
+    if y_resid_train.std() > y_train.std():
+        #revert to original if linear part adds noise
+        return y_train.copy(), 0.0
+    #return cleaned series of residuals
+    return pd.Series(y_resid_train, index=y_train.index), mean_test
