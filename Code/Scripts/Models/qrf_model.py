@@ -26,14 +26,6 @@ from Scripts.Utils.qrf_utils import (get_pca, make_factor_features_time_safe, fi
 
 
 
-def load_config(config_path):
-    """
-    helper fct to load the config files
-    """
-    #convert path:ensure it works across different OS/environments
-    absolute_path = Path(config_path).resolve()
-    with open(absolute_path, 'r') as f:
-        return yaml.safe_load(f)
 
 def run_experiment(config):
     #print current experiment name from config
