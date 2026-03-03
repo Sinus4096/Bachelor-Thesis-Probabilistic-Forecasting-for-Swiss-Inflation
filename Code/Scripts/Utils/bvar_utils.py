@@ -341,9 +341,7 @@ class BVAR:
                     lag_num= self.lag_indices[orig_k //block_size]
                     var_idx= self.feature_var_indices[feat_j]
                     
-                    #Set Own First Lag to 1.0
-                    if f_type == 0 and var_idx == i and lag_num == 1:
-                        Phi_prior_i[col_idx] = 1.0
+                    
 
                     #sigma of predictor
                     sigma_j= sigmas_all[feat_j] 
@@ -373,7 +371,7 @@ class BVAR:
                 Post_Precision_i= XX + np.diag(P_diag) + np.eye(K) * 1e-6
 
                 #Apply Prior Mean to Solver
-                RHS = (X.T @ Y[:, i]) + (P_diag * Phi_prior_i)
+                RHS = (X.T @ Y[:, i]) + (P_diag *Phi_prior_i)
 
                 #solve for beta using cholesky for speed/stability
                 L_i= np.linalg.cholesky(Post_Precision_i)
@@ -523,11 +521,7 @@ class BVAR:
                     if self.feature_type_map[feat_idx] ==0 and self.feature_var_indices[feat_idx] ==n:
                         #find smallest lag
                         orig_k= int(self.kept_indices[feat_idx])
-                        #check if lag 1
-                        if self.lag_indices[orig_k //block_size] == 1: 
-                            #set rw prior mean to 1 for own lag
-                            Phi_0[k_search, n]= 1.0 
-                            break
+                        
             
             #flatten prior mean matrix
             alpha_0= Phi_0.flatten(order='F')

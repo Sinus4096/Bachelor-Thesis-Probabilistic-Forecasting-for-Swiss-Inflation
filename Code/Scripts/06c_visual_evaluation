@@ -15,7 +15,7 @@ import seaborn as sns
 #common configuration for visual evaluation of forecasts
 #--------------------------------------------------------------------
 #select inflation measure for evaluation
-data_type= "Core"  # "headline" or "core"
+data_type= "Headline"  # "headline" or "core"
 #define monthly horizons for comparison
 horizons= [3, 6, 9, 12]
 #set rolling window size for accuracy plots
