@@ -330,8 +330,7 @@ class BVAR:
                 #intercept precision
                 P_diag[0]= 1.0 /a3 
                 
-                # --- CHANGE 1: Define Prior Mean Vector (Shrink to RW) ---
-                # Initialize prior mean to 0
+                #initialize prior mean to 0
                 Phi_prior_i = np.zeros(K) 
                 
                 for feat_j, f_type in enumerate(self.feature_type_map):
@@ -342,9 +341,7 @@ class BVAR:
                     lag_num= self.lag_indices[orig_k //block_size]
                     var_idx= self.feature_var_indices[feat_j]
                     
-                    # --- CHANGE 2: Set Own First Lag to 1.0 ---
-                    # If this feature is the same variable as the target (var_idx == i)
-                    # AND it is the first lag (lag_num == 1)
+                    #Set Own First Lag to 1.0
                     if f_type == 0 and var_idx == i and lag_num == 1:
                         Phi_prior_i[col_idx] = 1.0
 
@@ -375,9 +372,7 @@ class BVAR:
                 #posterior precision
                 Post_Precision_i= XX + np.diag(P_diag) + np.eye(K) * 1e-6
 
-                # --- CHANGE 3: Apply Prior Mean to Solver ---
-                # Calculate the Right Hand Side: X'Y + P*Beta_prior
-                # This pulls the coefficients towards Phi_prior_i instead of 0
+                #Apply Prior Mean to Solver
                 RHS = (X.T @ Y[:, i]) + (P_diag * Phi_prior_i)
 
                 #solve for beta using cholesky for speed/stability
@@ -392,27 +387,22 @@ class BVAR:
                 Unscaled_Cov= L_inv.T @L_inv
                 V_post_list.append(Unscaled_Cov)
             
-            # Calculate fitted values
+            #calculate fitted values
             Y_hat = X @ Phi_post_all
-            # Calculate actual residuals (in-sample error)
-            Residuals = Y - Y_hat
-            
-            # Calculate standard deviation of realized residuals
-            # This captures the actual h-step model uncertainty
-            sigmas_posterior = np.std(Residuals, axis=0)
-            
-            # Ensure no zeros (sanity check)
+            #calculate actual residuals (in-sample error)
+            Residuals = Y - Y_hat            
+            #calculate standard deviation of realized residuals
+            sigmas_posterior = np.std(Residuals, axis=0)            
+            #ensure no zeros (sanity check)
             sigmas_posterior = np.maximum(sigmas_posterior, 1e-6)
 
-            # --- 4. SAMPLING USING POSTERIOR SIGMAS ---
-            # Use the FITTED sigmas for the forecast noise
+            #SAMPLING USING POSTERIOR SIGMAS <-debug
             Sigma_fixed= np.diag(sigmas_posterior**2)             
             self.sigma_draws= np.repeat(Sigma_fixed[None, :, :], n_draws, axis=0) 
 
             self.phi_draws= np.empty((n_draws, K, N))
             for i in range(N):
-                # --- CRITICAL: Use sigmas_posterior (residuals) not sigmas (prior proxy) ---
-                # This ensures the sampling width matches the residuals you calculated above
+                #Use sigmas_posterior (residuals) not sigmas <-debug
                 cov_i=(sigmas_posterior[i]**2) *V_post_list[i]
                 
                 #numerical jitter to ensure pd

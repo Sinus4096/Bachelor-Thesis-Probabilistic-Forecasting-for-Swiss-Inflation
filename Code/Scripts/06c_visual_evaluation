@@ -15,14 +15,14 @@ import seaborn as sns
 #common configuration for visual evaluation of forecasts
 #--------------------------------------------------------------------
 #select inflation measure for evaluation
-data_type= "Headline"  # "headline" or "core"
+data_type= "Core"  # "headline" or "core"
 #define monthly horizons for comparison
 horizons= [3, 6, 9, 12]
 #set rolling window size for accuracy plots
 rolling_window= 36
 
 #models to compare in combined plots
-models_compare= ["Benchmark_ARGARCH", "QRF_Default_PCA", "bvar_independent_niw_hierarchical"]
+models_compare= ["bvar_independent_niw_hierarchical", "bvar_minnesota", "bvar_natural_niw_hierarchical"]
 
 #metrics / columns in your result csvs
 ACTUAL_COL= "Actual_YoY"
